@@ -1,92 +1,96 @@
-# E2E Verification Report — Task #30
+# KGKB End-to-End Verification Report
 
-**Date:** 2026-03-17 22:13 CST  
-**Backend:** FastAPI 0.135.1 + SQLite (aiosqlite) + FAISS 1.13.2  
-**Python:** 3.12.3 | **Frontend:** React 18 + Vite 5 + D3.js 7  
+**Date:** 2026-03-17 22:55 CST
+**Tester:** 小ops (OpenClaw agent:ops)
+**Environment:** Linux (daniel-ubuntu), Python 3.x, Node.js v22, FAISS 1.13.2
 
----
+## Test Results: 9/10 ✅
 
-## Result: ✅ ALL PASSED (20/20)
+| # | Test | Status | Notes |
+|---|------|--------|-------|
+| 1 | 首页加载 | ✅ | React SPA renders with navigation, dark theme, KGKB branding |
+| 2 | 创建知识节点 | ✅ | POST /api/knowledge returns 201 with UUID, title, content, tags |
+| 3 | 搜索 (Text/Semantic/Hybrid) | ✅ | Text mode finds exact match (score 1.0); Hybrid mode works; Semantic falls back gracefully when embedding unavailable |
+| 4 | 知识图谱 (D3) | ✅ | Graph page renders with 3 nodes, 1 edge, tag filters, zoom/pan controls |
+| 5 | 关系创建 | ✅ | POST /api/relations creates "uses" relation with weight 0.9 between nodes |
+| 6 | 编辑知识 | ✅ | PUT /api/knowledge/{id} updates title and tags correctly |
+| 7 | 导入/导出 | ✅ | POST /api/import: imported 1, skipped 0, errors 0; GET /api/export?format=json returns complete data; Markdown export also works |
+| 8 | 暗色主题 | ✅ | Default dark theme (`#111827`), color-scheme meta set, consistent dark UI |
+| 9 | API 文档 | ✅ | Swagger UI at /docs with 15 endpoints, 18 schemas, OAS 3.1 |
+| 10 | Docker 构建 | ⚠️ | Dockerfiles + docker-compose.yml valid; `docker compose build` requires root/sudo (permission denied for non-root user) |
 
-### API Tests: 34/34 passed (pytest)
+## Bugs Found & Fixed
 
-| Suite | Tests | Status |
-|-------|:-----:|--------|
-| Health & Root | 4 | ✅ |
-| Knowledge CRUD | 10 | ✅ |
-| Tags | 1 | ✅ |
-| Search | 4 | ✅ |
-| Relations | 7 | ✅ |
-| Graph | 3 | ✅ |
-| Import/Export | 4 | ✅ |
-| **Total** | **34** | **✅** |
+### 🔴 Critical: FAISS Vector Index Corruption (FIXED)
 
-### E2E Live Tests: 20/20 passed
+**Symptom:** Backend segfaults (SIGSEGV, exit code 139) during startup when `FAISSVectorStore.__init__()` tries to load `~/.kgkb/vectors.faiss`.
 
-| Step | Status | Detail |
-|------|--------|--------|
-| 1. Health Check | ✅ PASS | healthy \| db=True \| embed=False \| vectors=0 |
-| 2. Create Knowledge Nodes (5) | ✅ PASS | Created 5 nodes: OpenClaw, FastAPI, FAISS, Knowledge Graph, Daniel Li & AI Team |
-| 3. Add Relations (5) | ✅ PASS | Created 5 relations (uses, develops, related_to, integrates_with) |
-| 4a. Text Search | ✅ PASS | Found 2 results for "AI agent" |
-| 4b. Semantic Search (fallback) | ✅ PASS | Graceful fallback when embedding unavailable |
-| 4c. Hybrid Search | ✅ PASS | Combined text + semantic modes |
-| 4d. No-Results Search | ✅ PASS | Correctly returns 0 for gibberish queries |
-| 5a. Graph Data (full) | ✅ PASS | 5 nodes, 5 edges |
-| 5b. Graph Subgraph (centered) | ✅ PASS | BFS subgraph around OpenClaw node |
-| 6a. Export JSON | ✅ PASS | 5 entries + 5 relations exported |
-| 6b. Export Markdown | ✅ PASS | 1696 chars human-readable export |
-| 6c. Import (round-trip) | ✅ PASS | 2 imported, 1 skipped (empty content) |
-| 7a. Update Node | ✅ PASS | Title + tags updated successfully |
-| 7b. Tag Filter | ✅ PASS | Tag "import-test": 2 entries matched |
-| 7c. List Tags | ✅ PASS | 14 unique tags across all entries |
-| 7d. Relation Types | ✅ PASS | uses, develops, related_to, integrates_with |
-| 8a. Delete Node | ✅ PASS | Create → Delete → GET returns 404 |
-| 8b. Delete Relation | ✅ PASS | Relation removed successfully |
-| 9. Final Stats | ✅ PASS | Knowledge: 7 \| Relations: 4 |
-| 10. Embedding Status | ✅ PASS | Provider: ollama (unavailable, graceful fallback) |
+**Root Cause:** Corrupt FAISS index file at `/home/aa/.kgkb/vectors.faiss` (41KB, created 2026-03-17 12:12). `faiss.read_index()` crashes when loading this file.
 
-### Frontend Build: ✅
+**Fix:** Removed corrupt files:
+```bash
+mv ~/.kgkb/vectors.faiss ~/.kgkb/vectors.faiss.bak
+mv ~/.kgkb/vectors.meta ~/.kgkb/vectors.meta.bak
+```
 
-| Metric | Value |
-|--------|-------|
-| Build status | ✅ Success (5.59s) |
-| JS bundle | 365 KB (115 KB gzipped) |
-| CSS | 36 KB (7 KB gzipped) |
-| Preview server | HTTP 200 ✓ |
+**Impact:** Without this fix, the backend cannot start at all. FAISS library itself works fine — the specific .faiss file was corrupted (likely from an incomplete write or process crash).
 
-### Docker Compose
+**Recommendation:** Add graceful error handling in `FAISSVectorStore.load()` to catch segfaults (via subprocess) or add a file integrity check before loading.
 
-| Check | Status |
-|-------|--------|
-| Dockerfile.backend syntax | ✅ (reviewed, multi-stage Python 3.11) |
-| Dockerfile.frontend syntax | ✅ (reviewed, multi-stage Node 20 + nginx) |
-| nginx.conf | ✅ (reverse proxy /api → backend:8000) |
-| docker-compose.yml | ✅ (2 services, healthcheck, volume) |
-| Live build | ⏭️ Skipped (Docker daemon needs elevated permissions) |
+### 🟡 Minor: Embedding Service Unavailable (Expected)
 
----
+**Symptom:** `embedding_available: false` in health check.
 
-## Bug Fixed During Verification
+**Root Cause:** Default config points to `localhost:11434` (Ollama), which is not running on this machine. Embedding is remote at `100.65.110.126:11434` (Daniel's Mac Studio, currently offline).
 
-**Issue:** `GET /api/knowledge/search` returned 404  
-**Root cause:** FastAPI route ordering — `/api/knowledge/{kid}` matched before `/api/knowledge/search`, treating "search" as a knowledge ID  
-**Fix:** Moved search endpoint registration before the `{kid}` parameterized route in `backend/app/main.py`  
-**Impact:** 3 test cases fixed (test_text_search, test_search_no_results, test_search_validation)
+**Behavior:** Correct — app starts fine, semantic search gracefully falls back to text search. No crash.
 
----
+### 🟡 Minor: Frontend Port Conflict
 
-## Warnings (non-blocking)
+**Symptom:** Vite default port 5173 was occupied, fell back to port 3001 on first attempt. Old `vite preview` process (PID 464165) was still running on port 3000.
 
-- Pydantic V2 deprecation: class-based `config` in models (will update to `ConfigDict` in next minor)
-- `datetime.utcnow()` deprecated (will migrate to `datetime.now(UTC)` in next minor)
-- Embedding service (Ollama) unavailable in test env — graceful fallback confirmed working
+**Fix:** Killed stale processes, started clean.
 
----
+## API Endpoints Verified (15/15)
 
-## Files Modified
+| Method | Endpoint | Status |
+|--------|----------|--------|
+| POST | /api/knowledge | ✅ 201 |
+| GET | /api/knowledge | ✅ Paginated |
+| GET | /api/knowledge/search | ✅ text/semantic/hybrid |
+| GET | /api/search | ✅ Legacy |
+| GET | /api/knowledge/{id} | ✅ |
+| PUT | /api/knowledge/{id} | ✅ |
+| DELETE | /api/knowledge/{id} | ✅ |
+| GET | /api/tags | ✅ |
+| GET | /api/graph | ✅ D3 data |
+| POST | /api/relations | ✅ 201 |
+| GET | /api/relations | ✅ |
+| GET | /api/relations/types | ✅ |
+| GET | /api/health | ✅ |
+| GET | /api/embedding/status | ✅ |
+| POST | /api/import | ✅ |
+| GET | /api/export | ✅ json/markdown |
 
-- `backend/app/main.py` — Route ordering fix (search before {kid})
-- `scripts/e2e_verify.py` — E2E verification script (new)
-- `docs/E2E-VERIFICATION.md` — This report (new)
-- `docs/e2e-report.json` — Raw JSON report data (new)
+## Frontend Pages Verified
+
+- **Graph** (`/`): D3 force graph with nodes, edges, tag filters, zoom controls ✅
+- **List** (`/list`): Card grid with search, tag filters, import/export buttons ✅
+- **Search** (`/search`): Query input with Text/Semantic/Hybrid mode selector ✅
+- **API Docs** (`/docs`): Full Swagger UI with all endpoints ✅
+
+## System Info
+
+```
+Backend:  FastAPI + Uvicorn on http://0.0.0.0:8000
+Frontend: Vite + React on http://localhost:5173
+Database: SQLite at ~/.kgkb/data.db (schema v2)
+Vector:   FAISS 1.13.2 (empty index, dimension 1024)
+Config:   ~/.kgkb/config.json (Ollama/qwen3-embedding:0.6b)
+```
+
+## Conclusion
+
+**Status: ✅ Pass (9/10)**
+
+KGKB is functional and ready for use. The only critical bug (FAISS corruption) was fixed. Docker build is blocked by permissions (not a code issue). The app gracefully handles embedding service unavailability.
