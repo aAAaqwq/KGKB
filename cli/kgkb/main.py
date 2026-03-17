@@ -366,114 +366,247 @@ def add(
         pass  # Don't fail for status check
 
 
-@app.command()
-def query(
-    text: str = typer.Argument(..., help="Search query"),
-    limit: int = typer.Option(10, "--limit", "-l", help="Maximum results"),
-    semantic: bool = typer.Option(False, "--semantic", "-s", help="Use semantic search"),
-):
-    """Search knowledge entries."""
-    conn = init_db()
-    cursor = conn.cursor()
+def _format_search_results(results: list, query_text: str, mode: str, total: int, output_json: bool) -> None:
+    """Format and display search results as a rich table or JSON.
 
-    if semantic:
-        # TODO: Implement semantic search with embeddings
-        console.print("⚠️ Semantic search not yet implemented, using keyword search", style="yellow")
-
-    # Simple keyword search
-    search_term = f"%{text}%"
-    cursor.execute(
-        """
-        SELECT id, content, tags, source, created_at
-        FROM knowledge
-        WHERE content LIKE ? OR tags LIKE ?
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (search_term, search_term, limit),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-
-    if not rows:
-        console.print("🔍 No results found", style="yellow")
+    Args:
+        results: List of search result dicts from the API.
+        query_text: The original query string.
+        mode: Search mode used (text, semantic, hybrid).
+        total: Total number of results returned.
+        output_json: If True, output raw JSON instead of a table.
+    """
+    if output_json:
+        rprint(json.dumps({"results": results, "total": total, "query": query_text, "mode": mode}, indent=2, ensure_ascii=False))
         return
 
-    table = Table(title=f"🔍 Search Results ({len(rows)} found)")
+    if not results:
+        console.print(f"🔍 No results found for '{query_text}' (mode: {mode})", style="yellow")
+        return
+
+    table = Table(title=f"🔍 Search Results — '{query_text}' ({total} found, mode: {mode})")
     table.add_column("ID", style="cyan", width=10)
-    table.add_column("Content", width=50)
-    table.add_column("Tags", width=20)
-    table.add_column("Created", width=12)
+    table.add_column("Title", width=30)
+    table.add_column("Content", width=40)
+    table.add_column("Tags", style="yellow", width=18)
+    table.add_column("Score", style="green", width=7, justify="right")
+    table.add_column("Created", style="dim", width=12)
 
-    for row in rows:
-        tags = json.loads(row["tags"])
+    for r in results:
+        rid = r.get("id", "")[:8]
+        title = r.get("title", "")
+        if len(title) > 30:
+            title = title[:27] + "..."
+        content = r.get("content", "").replace("\n", " ")
+        if len(content) > 40:
+            content = content[:37] + "..."
+        tags = r.get("tags", [])
         tag_str = ", ".join(tags[:3]) + ("..." if len(tags) > 3 else "")
-        content = row["content"][:47] + "..." if len(row["content"]) > 50 else row["content"]
-        created = row["created_at"][:10]
-
-        table.add_row(row["id"][:8], content, tag_str, created)
+        score = f"{r.get('score', 0):.2f}"
+        created = r.get("created_at", "")[:10]
+        table.add_row(rid, title, content, tag_str, score, created)
 
     console.print(table)
+
+
+@app.command()
+def query(
+    text: str = typer.Argument(..., help="Semantic search query text"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Maximum number of results"),
+    min_score: float = typer.Option(0.0, "--min-score", help="Minimum relevance score (0-1)"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output results as JSON"),
+):
+    """Semantic search — find knowledge by meaning, not just keywords.
+
+    Uses the backend embedding service (e.g. Ollama qwen3-embedding) to find
+    conceptually similar entries. Falls back to text search if embeddings are
+    unavailable.
+
+    Examples:
+        kgkb query "machine learning basics"
+        kgkb query "how to deploy docker" --limit 5
+        kgkb query "database optimization" --json
+    """
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
+
+        try:
+            response = client.get(
+                "/api/knowledge/search",
+                params={"q": text, "mode": "semantic", "limit": limit, "min_score": min_score},
+            )
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+
+        handle_api_error(response, "semantic search")
+        data = response.json()
+
+    _format_search_results(data.get("results", []), text, data.get("mode", "semantic"), data.get("total", 0), output_json)
+
+
+@app.command()
+def search(
+    text: str = typer.Argument(..., help="Text search query"),
+    mode: str = typer.Option(
+        "text", "--mode", "-m",
+        help="Search mode: text (keyword), semantic (meaning), or hybrid (both)",
+    ),
+    limit: int = typer.Option(10, "--limit", "-l", help="Maximum number of results"),
+    min_score: float = typer.Option(0.0, "--min-score", help="Minimum relevance score (0-1)"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output results as JSON"),
+):
+    """Search knowledge entries with configurable mode.
+
+    Modes:
+      - text:     Keyword/full-text search (fast, exact matching)
+      - semantic: Vector similarity search (meaning-based)
+      - hybrid:   Combines text + semantic scores
+
+    Examples:
+        kgkb search "python tutorial"
+        kgkb search "deploy to cloud" --mode hybrid
+        kgkb search "API design" --mode semantic --limit 20
+        kgkb search "docker" --json
+    """
+    valid_modes = ("text", "semantic", "hybrid")
+    if mode not in valid_modes:
+        console.print(f"❌ Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}", style="red")
+        raise typer.Exit(1)
+
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
+
+        try:
+            response = client.get(
+                "/api/knowledge/search",
+                params={"q": text, "mode": mode, "limit": limit, "min_score": min_score},
+            )
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+
+        handle_api_error(response, "search")
+        data = response.json()
+
+    _format_search_results(data.get("results", []), text, data.get("mode", mode), data.get("total", 0), output_json)
 
 
 @app.command("list")
 def list_entries(
-    tag: str = typer.Option(None, "--tag", "-t", help="Filter by tag"),
-    limit: int = typer.Option(20, "--limit", "-l", help="Maximum results"),
-    all: bool = typer.Option(False, "--all", "-a", help="Show all entries"),
+    tag: Optional[str] = typer.Option(None, "--tag", "-t", help="Filter by tag"),
+    content_type: Optional[str] = typer.Option(None, "--type", help="Filter by content type (text/url/markdown)"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Maximum results per page"),
+    offset: int = typer.Option(0, "--offset", "-o", help="Pagination offset (skip N entries)"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output results as JSON"),
 ):
-    """List knowledge entries."""
-    conn = init_db()
-    cursor = conn.cursor()
+    """List knowledge entries with pagination and filtering.
 
-    if all:
-        limit = 1000
+    Displays knowledge in a formatted table with ID, title, content preview,
+    tags, and creation date. Supports filtering by tag and content type,
+    and pagination via --limit / --offset.
 
-    if tag:
-        search_term = f'%"{tag}"%'
-        cursor.execute(
-            """
-            SELECT id, content, tags, created_at
-            FROM knowledge
-            WHERE tags LIKE ?
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (search_term, limit),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id, content, tags, created_at
-            FROM knowledge
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+    Examples:
+        kgkb list
+        kgkb list --tag python --limit 5
+        kgkb list --offset 20 --limit 10
+        kgkb list --type markdown --json
+    """
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
 
-    rows = cursor.fetchall()
-    conn.close()
+        params: dict = {"limit": limit, "offset": offset}
+        if tag:
+            params["tag"] = tag
+        if content_type:
+            params["content_type"] = content_type
 
-    if not rows:
-        console.print("📭 No entries found", style="yellow")
+        try:
+            response = client.get("/api/knowledge", params=params)
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+
+        handle_api_error(response, "list knowledge")
+        data = response.json()
+
+    items = data.get("items", [])
+    total = data.get("total", 0)
+    current_offset = data.get("offset", offset)
+    current_limit = data.get("limit", limit)
+
+    if output_json:
+        rprint(json.dumps(data, indent=2, ensure_ascii=False))
         return
 
-    table = Table(title=f"📋 Knowledge Entries ({len(rows)} total)")
+    if not items:
+        filter_desc = ""
+        if tag:
+            filter_desc += f" with tag '{tag}'"
+        if content_type:
+            filter_desc += f" of type '{content_type}'"
+        console.print(f"📭 No entries found{filter_desc}", style="yellow")
+        return
+
+    # Build title with pagination info
+    page_start = current_offset + 1
+    page_end = current_offset + len(items)
+    title = f"📋 Knowledge Entries — showing {page_start}-{page_end} of {total}"
+    if tag:
+        title += f" [tag: {tag}]"
+    if content_type:
+        title += f" [type: {content_type}]"
+
+    table = Table(title=title)
     table.add_column("ID", style="cyan", width=10)
-    table.add_column("Content", width=50)
-    table.add_column("Tags", width=20)
-    table.add_column("Created", width=12)
+    table.add_column("Title", width=28)
+    table.add_column("Content", width=36)
+    table.add_column("Type", style="magenta", width=8)
+    table.add_column("Tags", style="yellow", width=18)
+    table.add_column("Created", style="dim", width=12)
 
-    for row in rows:
-        tags = json.loads(row["tags"])
+    for item in items:
+        kid = item.get("id", "")[:8]
+        title_text = item.get("title", "")
+        if len(title_text) > 28:
+            title_text = title_text[:25] + "..."
+        content = item.get("content", "").replace("\n", " ")
+        if len(content) > 36:
+            content = content[:33] + "..."
+        ctype = item.get("content_type", "text")
+        tags = item.get("tags", [])
         tag_str = ", ".join(tags[:3]) + ("..." if len(tags) > 3 else "")
-        content = row["content"][:47] + "..." if len(row["content"]) > 50 else row["content"]
-        created = row["created_at"][:10]
+        created = item.get("created_at", "")[:10]
 
-        table.add_row(row["id"][:8], content, tag_str, created)
+        table.add_row(kid, title_text, content, ctype, tag_str, created)
 
     console.print(table)
+
+    # Pagination hint
+    if page_end < total:
+        next_offset = current_offset + current_limit
+        console.print(
+            f"\n💡 More entries available. Use [bold]--offset {next_offset}[/bold] to see the next page.",
+            style="dim",
+        )
 
 
 @app.command()
