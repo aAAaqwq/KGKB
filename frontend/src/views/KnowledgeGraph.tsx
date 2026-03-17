@@ -63,15 +63,38 @@ const ZOOM_MAX = 6
 const ZOOM_STEP = 1.5
 const TRANSITION_MS = 400
 
+/** Dynamic tag color palette — generates colors for unknown tags. */
+const TAG_COLOR_BASE: Record<string, string> = {
+  AI: '#3b82f6',
+  tech: '#10b981',
+  finance: '#f59e0b',
+  research: '#8b5cf6',
+  project: '#ef4444',
+  idea: '#ec4899',
+  science: '#14b8a6',
+  code: '#06b6d4',
+  note: '#a3a3a3',
+}
+
+/** HSL-based color generation for unknown tags. */
+function hashTagColor(tag: string): string {
+  let hash = 0
+  for (let i = 0; i < tag.length; i++) {
+    hash = ((hash << 5) - hash + tag.charCodeAt(i)) | 0
+  }
+  const hue = Math.abs(hash) % 360
+  return `hsl(${hue}, 60%, 55%)`
+}
+
 function getNodeColor(tags: string[]): string {
   for (const tag of tags) {
     const lower = tag.toLowerCase()
-    for (const [key, color] of Object.entries(TAG_COLORS)) {
-      if (key === 'default') continue
+    for (const [key, color] of Object.entries(TAG_COLOR_BASE)) {
       if (lower === key.toLowerCase()) return color
     }
   }
-  return TAG_COLORS.default
+  if (tags.length > 0) return hashTagColor(tags[0])
+  return '#6b7280'
 }
 
 function computeRadius(degree: number): number {
@@ -79,6 +102,12 @@ function computeRadius(degree: number): number {
   const MAX_R = 36
   const r = MIN_R + Math.sqrt(degree) * 6
   return Math.min(r, MAX_R)
+}
+
+/** Truncate a label with smart break. */
+function truncLabel(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  return text.slice(0, maxLen - 1).trimEnd() + '…'
 }
 
 export function KnowledgeGraph() {
@@ -434,7 +463,9 @@ export function KnowledgeGraph() {
       })
 
     svg.call(zoom)
-    svg.on('dblclick.zoom', null)
+    // Enable touch gestures for pinch-zoom on mobile
+    svg.call(zoom).on('dblclick.zoom', null)
+    svg.style('touch-action', 'none') // allow D3 to handle all touch events
     svg.on('dblclick', (event: MouseEvent) => {
       event.preventDefault()
       event.stopPropagation()
@@ -465,21 +496,32 @@ export function KnowledgeGraph() {
       .data(['blur', 'SourceGraphic'])
       .join('feMergeNode').attr('in', d => d)
 
-    // Force simulation
+    // Force simulation — tuned for better graph readability
+    const nodeCount = nodes.length
+    const isLargeGraph = nodeCount > 30
+    const chargeMult = isLargeGraph ? 0.6 : 1 // less repulsion in large graphs
+
     const simulation = d3.forceSimulation<SimNode>(nodes)
       .force('link', d3.forceLink<SimNode, SimLink>(links)
         .id(d => d.id)
         .distance(d => {
           const src = nodeMap.get(typeof d.source === 'string' ? d.source : (d.source as SimNode).id)
           const tgt = nodeMap.get(typeof d.target === 'string' ? d.target : (d.target as SimNode).id)
-          return (src?.radius ?? 16) + (tgt?.radius ?? 16) + 60
+          return (src?.radius ?? 16) + (tgt?.radius ?? 16) + 80
         })
-        .strength(d => Math.min(d.weight * 0.5, 1)))
-      .force('charge', d3.forceManyBody().strength(d => -200 - (d as SimNode).radius * 8))
-      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05))
-      .force('collision', d3.forceCollide<SimNode>().radius(d => d.radius + 8).strength(0.8))
-      .force('x', d3.forceX(width / 2).strength(0.03))
-      .force('y', d3.forceY(height / 2).strength(0.03))
+        .strength(d => Math.min(d.weight * 0.4, 0.8)))
+      .force('charge', d3.forceManyBody()
+        .strength(d => (-250 - (d as SimNode).radius * 10) * chargeMult)
+        .distanceMax(isLargeGraph ? 500 : 800))
+      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.04))
+      .force('collision', d3.forceCollide<SimNode>()
+        .radius(d => d.radius + 12)
+        .strength(0.9)
+        .iterations(2))
+      .force('x', d3.forceX(width / 2).strength(0.025))
+      .force('y', d3.forceY(height / 2).strength(0.025))
+      .alphaDecay(0.02) // slower cooldown = better layout
+      .velocityDecay(0.3) // some momentum for smoother settling
 
     simulationRef.current = simulation
     nodesRef.current = nodes
@@ -492,11 +534,13 @@ export function KnowledgeGraph() {
       .attr('stroke-opacity', 0.6)
       .attr('marker-end', 'url(#arrowhead)')
 
+    // Edge labels — styled with a background rect for readability
     const linkLabel = g.append('g').attr('class', 'edge-labels')
       .selectAll('text').data(links).join('text')
-      .text(d => d.type)
-      .attr('font-size', '9px').attr('fill', '#6b7280')
+      .text(d => d.type.replace(/_/g, ' '))
+      .attr('font-size', '8px').attr('fill', '#6b728099')
       .attr('text-anchor', 'middle').attr('pointer-events', 'none')
+      .attr('font-style', 'italic')
 
     // Drag behavior
     let isDragging = false
@@ -539,12 +583,14 @@ export function KnowledgeGraph() {
       .attr('font-size', '10px').attr('font-weight', 'bold')
       .attr('fill', '#fff').attr('pointer-events', 'none')
 
-    // Node labels
+    // Node labels — positioned below node with smart truncation
     node.append('text').attr('class', 'node-label')
-      .text(d => d.label.length > 18 ? d.label.slice(0, 18) + '…' : d.label)
+      .text(d => truncLabel(d.label, d.radius > 20 ? 22 : 16))
       .attr('text-anchor', 'middle').attr('dy', d => d.radius + 14)
-      .attr('font-size', '11px').attr('fill', '#d1d5db')
+      .attr('font-size', d => d.degree >= 3 ? '12px' : '11px')
+      .attr('fill', '#d1d5db')
       .attr('pointer-events', 'none')
+      .style('text-shadow', '0 1px 3px rgba(0,0,0,0.8), 0 0px 6px rgba(0,0,0,0.6)')
 
     // Adjacency map for hover highlighting
     const adjacency = new Map<string, Set<string>>()
@@ -825,10 +871,10 @@ export function KnowledgeGraph() {
         />
       )}
 
-      <div className="flex gap-4" ref={containerRef}>
+      <div className="flex gap-4 graph-responsive" ref={containerRef}>
         {/* Graph Canvas */}
         <div className="flex-1 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden relative">
-          <svg ref={svgRef} width="100%" height="600" className="w-full" />
+          <svg ref={svgRef} width="100%" height="600" className="w-full min-h-[350px] sm:min-h-[500px]" />
 
           {/* Zoom controls overlay */}
           <div className="absolute bottom-4 right-4 flex flex-col gap-1.5">
@@ -841,11 +887,15 @@ export function KnowledgeGraph() {
             <button onClick={resetZoom} className="w-8 h-8 bg-gray-700/90 hover:bg-gray-600 rounded flex items-center justify-center text-gray-300 text-sm transition backdrop-blur-sm" title="Reset zoom (0)">↺</button>
           </div>
 
-          {/* Interaction hints */}
-          <div className="absolute top-3 left-3 text-[10px] text-gray-500 leading-relaxed pointer-events-none opacity-70 select-none">
+          {/* Interaction hints — desktop only */}
+          <div className="absolute top-3 left-3 text-[10px] text-gray-500 leading-relaxed pointer-events-none opacity-70 select-none hidden sm:block">
             <span>Scroll: zoom · Drag: pan · Drag node: move</span><br />
             <span>Double-click: zoom in · Shift+dbl: zoom out</span><br />
             <span>Double-click node: focus · Keys: +/−/0/F</span>
+          </div>
+          {/* Touch hints — mobile only */}
+          <div className="absolute top-3 left-3 text-[10px] text-gray-500 leading-relaxed pointer-events-none opacity-70 select-none sm:hidden">
+            <span>Pinch: zoom · Drag: pan · Tap: select</span>
           </div>
         </div>
 
@@ -868,29 +918,30 @@ export function KnowledgeGraph() {
       </div>
 
       {/* Legend */}
-      <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-400">
+      <div className="mt-4 flex flex-wrap gap-3 sm:gap-4 text-xs text-gray-400">
         {tagCounts.length > 0 ? (
           tagCounts
             .sort((a, b) => b.count - a.count)
+            .slice(0, 12) // limit legend items for readability
             .map(({ tag }) => (
-              <span key={tag} className="flex items-center gap-1">
-                <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: getNodeColor([tag]) }} />
-                {tag}
+              <span key={tag} className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-full inline-block flex-shrink-0" style={{ backgroundColor: getNodeColor([tag]) }} />
+                <span className="truncate max-w-[80px] sm:max-w-none">{tag}</span>
               </span>
             ))
         ) : (
-          Object.entries(TAG_COLORS).filter(([k]) => k !== 'default').map(([tag, color]) => (
-            <span key={tag} className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: color }} />
+          Object.entries(TAG_COLOR_BASE).map(([tag, color]) => (
+            <span key={tag} className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full inline-block flex-shrink-0" style={{ backgroundColor: color }} />
               {tag}
             </span>
           ))
         )}
-        <span className="flex items-center gap-1 ml-4 text-gray-500">
+        <span className="flex items-center gap-1.5 ml-4 text-gray-500">
           <span className="w-3 h-3 rounded-full inline-block border border-gray-500" />
           = few connections
         </span>
-        <span className="flex items-center gap-1 text-gray-500">
+        <span className="flex items-center gap-1.5 text-gray-500">
           <span className="w-5 h-5 rounded-full inline-block border border-gray-500" />
           = hub node
         </span>
