@@ -1,4 +1,4 @@
-# KGKB - Knowledge Graph Knowledge Base
+# KGKB — Knowledge Graph Knowledge Base
 
 <div align="center">
 
@@ -10,9 +10,9 @@
 
 **A graph-visualized, AI-predictive knowledge base that connects everything.**
 
-*Store • Visualize • Connect • Predict*
+*Store · Visualize · Connect · Predict*
 
-[English](#overview) | [中文文档](docs/README-CN.md)
+[English](#overview) · [中文文档](docs/README-CN.md) · [API Reference](docs/API.md)
 
 </div>
 
@@ -20,67 +20,81 @@
 
 ## Overview
 
-KGKB is a next-generation knowledge management system that combines:
-- **📍 Local-first storage** — Your data stays on your machine
-- **🕸️ Graph visualization** — See knowledge connections at a glance
-- **🔮 AI prediction** — Discover hidden patterns and predict trends
-- **🔌 AI Agent integration** — Works with OpenClaw and other AI frameworks
+KGKB is a **local-first** knowledge management system that stores your knowledge as a graph. Instead of flat notes or folders, every piece of knowledge becomes a **node** and every connection becomes an **edge** — creating a living network of ideas you can explore, search, and visualize.
 
-Inspired by [GitNexus](https://github.com/abhigyanpatwari/GitNexus) (code graph) and [MiroFish](https://github.com/666ghj/MiroFish) (swarm intelligence), KGKB fuses knowledge graphs with predictive AI.
+### Why KGKB?
 
-## Features
+| Feature | KGKB | Notion | Obsidian |
+|---------|:----:|:------:|:--------:|
+| **Local-first** | ✅ | ❌ | ✅ |
+| **Graph visualization** | ✅ Interactive D3.js | ❌ | ⚠️ Plugin |
+| **Semantic search** | ✅ FAISS/Ollama | ❌ | ❌ |
+| **CLI interface** | ✅ | ❌ | ❌ |
+| **REST API** | ✅ | ❌ | ❌ |
+| **AI Agent integration** | ✅ OpenClaw | ❌ | ❌ |
+| **Open source** | ✅ MIT | ❌ | ⚠️ Partial |
 
-| Feature | Status | Description |
-|---------|:------:|-------------|
-| CLI Interface | ✅ | `kgkb add/query/list` commands |
-| Vector Search | ✅ | Semantic search with FAISS/ChromaDB |
-| Graph Visualization | ✅ | Interactive D3.js/Cytoscape.js web UI |
-| Knowledge Linking | ✅ | Manual + AI-suggested connections |
-| AI Prediction | 🚧 | Trend prediction based on graph patterns |
-| OpenClaw Integration | 🚧 | Native knowledge provider for AI agents |
-| Multi-Agent Simulation | 📅 | Swarm intelligence prediction |
+### Core Features
 
-## Screenshots
+- 🧠 **Smart Storage** — SQLite-backed with full-text search and tagging
+- 🕸️ **Interactive Graph** — D3.js force-directed visualization with zoom, filter, and link mode
+- 🔍 **Triple Search** — Text, semantic (vector), and hybrid search modes
+- 🔗 **Knowledge Linking** — Create typed, weighted relationships between entries
+- 📥 **Import/Export** — JSON import/export for portability
+- 🖥️ **CLI + Web** — Full CLI for power users, polished React web UI for everyone else
+- 🌙 **Dark Theme** — Carefully designed dark UI with responsive mobile layout
 
-<div align="center">
-<table>
-<tr>
-<td><img src="docs/screenshots/graph-view.png" alt="Graph View" width="100%"/></td>
-<td><img src="docs/screenshots/search.png" alt="Semantic Search" width="100%"/></td>
-</tr>
-<tr>
-<td align="center"><em>Knowledge Graph View</em></td>
-<td align="center"><em>Semantic Search Results</em></td>
-</tr>
-</table>
-</div>
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 18+
-- SQLite3
+- **Python 3.11+** — Backend and CLI
+- **Node.js 18+** — Frontend build
+- **SQLite3** — Included with Python
 
 ### Installation
 
 ```bash
-# Clone the repo
+# Clone the repository
 git clone https://github.com/aAAaqwq/KGKB.git
 cd KGKB
 
-# Install backend
+# Set up backend
 pip install -r requirements.txt
 
-# Install frontend
+# Set up frontend
 cd frontend && npm install && cd ..
-
-# Initialize database
-kgkb init
 ```
 
-### Basic Usage
+### Run
+
+```bash
+# Start the backend API server
+python backend/run.py
+# → Runs on http://localhost:8000
+
+# In another terminal, start the frontend dev server
+cd frontend && npm run dev
+# → Runs on http://localhost:5173
+```
+
+### Production Build
+
+```bash
+# Build the frontend
+cd frontend && npm run build
+
+# The built files go to frontend/dist/
+# The backend can serve them as static files
+```
+
+---
+
+## Usage
+
+### CLI
 
 ```bash
 # Add knowledge
@@ -88,33 +102,40 @@ kgkb add "OpenAI released GPT-5 with 10x reasoning capability" \
   --tags "AI,GPT,OpenAI" \
   --source "https://openai.com/blog/gpt5"
 
-# Query knowledge
+# Semantic search
 kgkb query "latest AI developments" --limit 10
 
 # List by tag
 kgkb list --tag "AI"
 
-# Start web UI
+# Link two entries
+kgkb link <id1> <id2> --type "relates_to"
+
+# Export all data
+kgkb export --format json
+
+# Start web server
 kgkb web
 ```
 
-### Configuration
+### Web UI
 
-Create `~/.kgkb/config.yaml`:
+The web interface provides four main views:
 
-```yaml
-embedding:
-  provider: ollama  # openai, ollama, local
-  model: nomic-embed-text
-  endpoint: http://localhost:11434
+| View | Path | Description |
+|------|------|-------------|
+| **Graph** | `/` | Interactive force-directed knowledge graph |
+| **List** | `/list` | Browse, filter, and manage all entries |
+| **Search** | `/search` | Text, semantic, and hybrid search |
+| **Add** | `/add` | Create new knowledge entries |
 
-database:
-  path: ~/.kgkb/kgkb.db
+**Keyboard shortcuts:**
+- `Ctrl/⌘ + K` — Focus search
+- `Ctrl/⌘ + N` — Add new knowledge
+- `+` / `-` / `0` / `F` — Zoom controls (graph view)
+- `Esc` — Close panels
 
-vector:
-  backend: faiss  # faiss or chroma
-  dimension: 768
-```
+---
 
 ## Architecture
 
@@ -122,115 +143,202 @@ vector:
 ┌─────────────────────────────────────────────────────────┐
 │                     Frontend (React)                     │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
-│  │ Graph UI │  │ Search   │  │ Knowledge Editor     │  │
-│  │ (D3.js)  │  │ Results  │  │                      │  │
+│  │ Graph UI │  │ Search   │  │ Knowledge CRUD       │  │
+│  │ (D3.js)  │  │ View     │  │ (List/Add/Detail)    │  │
 │  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘  │
-└───────┼─────────────┼───────────────────┼──────────────┘
+│       └──────────────┼───────────────────┘              │
+│                      │ Axios HTTP Client                │
+└──────────────────────┼──────────────────────────────────┘
+                       │ REST API (JSON)
+┌──────────────────────▼──────────────────────────────────┐
+│                   Backend (FastAPI)                       │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
+│  │ Knowledge│  │ Vector   │  │ Graph Engine         │  │
+│  │ Service  │  │ Store    │  │ (Nodes + Relations)  │  │
+│  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘  │
+└───────┼─────────────┼───────────────────┼───────────────┘
         │             │                   │
-        └─────────────┼───────────────────┘
-                      │ REST API
-┌─────────────────────▼─────────────────────────────────┐
-│                   Backend (FastAPI)                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │ Knowledge│  │ Vector   │  │ Graph Engine         │ │
-│  │ Service  │  │ Search   │  │                      │ │
-│  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘ │
-└───────┼─────────────┼───────────────────┼─────────────┘
-        │             │                   │
-┌───────▼─────────────▼───────────────────▼─────────────┐
-│                    Storage Layer                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │ SQLite   │  │ FAISS/   │  │ Graph Store          │ │
-│  │ (Meta)   │  │ Chroma   │  │ (Nodes + Edges)      │ │
-│  └──────────┘  └──────────┘  └──────────────────────┘ │
-└────────────────────────────────────────────────────────┘
+┌───────▼─────────────▼───────────────────▼───────────────┐
+│                    Storage Layer                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
+│  │ SQLite   │  │ FAISS    │  │ Adjacency List       │  │
+│  │ (Data)   │  │ (Vectors)│  │ (Relations)          │  │
+│  └──────────┘  └──────────┘  └──────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Tech Stack
+### Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| **CLI** | Python Typer + Rich |
-| **Backend** | FastAPI + SQLAlchemy |
-| **Frontend** | React + TypeScript + Tailwind |
-| **Visualization** | D3.js / Cytoscape.js |
-| **Vector DB** | FAISS / ChromaDB |
-| **Graph DB** | SQLite (adjacency list) |
-| **Embedding** | OpenAI / Ollama / Local |
+| **CLI** | Python + Typer + Rich |
+| **Backend** | FastAPI + SQLAlchemy + Pydantic |
+| **Frontend** | React 18 + TypeScript + Tailwind CSS |
+| **Visualization** | D3.js (force-directed graph) |
+| **Vector DB** | FAISS (with Ollama/OpenAI embeddings) |
+| **Database** | SQLite |
+| **Build** | Vite |
+
+### Project Structure
+
+```
+knowledge-graph-kb/
+├── backend/
+│   ├── app/
+│   │   ├── main.py          # FastAPI app + routes
+│   │   ├── models/           # SQLAlchemy models
+│   │   └── services/         # Business logic
+│   │       ├── knowledge.py  # Knowledge CRUD
+│   │       ├── embedding.py  # Embedding provider
+│   │       └── vector_store.py # FAISS vector store
+│   └── run.py                # Entry point
+├── frontend/
+│   ├── src/
+│   │   ├── api/client.ts     # Typed API client
+│   │   ├── components/       # Reusable UI components
+│   │   │   ├── ConfirmDialog.tsx
+│   │   │   ├── EmptyState.tsx
+│   │   │   ├── GraphFilters.tsx
+│   │   │   ├── LinkModeDialog.tsx
+│   │   │   ├── LoadingSpinner.tsx
+│   │   │   ├── NodeDetailPanel.tsx
+│   │   │   └── Toast.tsx
+│   │   ├── hooks/            # Custom React hooks
+│   │   │   └── useKeyboard.ts
+│   │   ├── views/            # Page-level components
+│   │   │   ├── KnowledgeGraph.tsx
+│   │   │   ├── KnowledgeList.tsx
+│   │   │   ├── KnowledgeDetail.tsx
+│   │   │   ├── SearchView.tsx
+│   │   │   └── AddKnowledge.tsx
+│   │   ├── App.tsx           # Root layout + routing
+│   │   └── main.tsx          # Entry point
+│   ├── tailwind.config.js
+│   └── vite.config.ts
+├── cli/                      # CLI tool
+├── docs/                     # Documentation
+│   ├── PRD.md
+│   └── API.md
+├── tests/
+├── requirements.txt
+└── README.md
+```
+
+---
 
 ## API Reference
 
-### REST API
+Full API documentation: **[docs/API.md](docs/API.md)**
 
-```bash
-# Add knowledge
-POST /api/knowledge
-{
-  "content": "string",
-  "tags": ["tag1", "tag2"],
-  "source": "optional url"
-}
+### Quick Reference
 
-# Search knowledge
-GET /api/search?q={query}&limit={n}
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/knowledge` | Create knowledge entry |
+| `GET` | `/api/knowledge` | List entries (paginated) |
+| `GET` | `/api/knowledge/:id` | Get single entry |
+| `PUT` | `/api/knowledge/:id` | Update entry |
+| `DELETE` | `/api/knowledge/:id` | Delete entry |
+| `GET` | `/api/knowledge/search` | Search (text/semantic/hybrid) |
+| `GET` | `/api/tags` | List all tags |
+| `POST` | `/api/relations` | Create relation |
+| `GET` | `/api/relations` | List relations |
+| `DELETE` | `/api/relations/:id` | Delete relation |
+| `GET` | `/api/graph` | Get graph data |
+| `POST` | `/api/import` | Bulk import |
+| `GET` | `/api/export` | Export all data |
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/stats` | Database statistics |
 
-# Get graph data
-GET /api/graph?depth={n}
+---
 
-# Create relationship
-POST /api/relations
-{
-  "source_id": "uuid",
-  "target_id": "uuid",
-  "type": "relates_to"
-}
+## Configuration
+
+Create `~/.kgkb/config.yaml`:
+
+```yaml
+# Embedding provider configuration
+embedding:
+  provider: ollama           # openai | ollama | local
+  model: nomic-embed-text    # Model name
+  endpoint: http://localhost:11434  # For ollama/local
+
+# Database location
+database:
+  path: ~/.kgkb/kgkb.db
+
+# Vector store
+vector:
+  backend: faiss             # faiss | chroma
+  dimension: 768             # Must match embedding model
 ```
 
-### CLI Commands
+### Environment Variables
 
-```bash
-kgkb init                    # Initialize database
-kgkb add <content>           # Add knowledge entry
-kgkb query <text>            # Semantic search
-kgkb list [--tag <tag>]      # List entries
-kgkb link <id1> <id2>        # Create relationship
-kgkb export [--format json]  # Export data
-kgkb web                     # Start web server
-kgkb config                  # Show configuration
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KGKB_DB_PATH` | `~/.kgkb/kgkb.db` | SQLite database path |
+| `KGKB_EMBEDDING_PROVIDER` | `ollama` | Embedding provider |
+| `KGKB_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model |
+| `KGKB_EMBEDDING_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
+
+---
 
 ## Roadmap
 
-- [x] CLI interface (add/query/list)
-- [x] Vector embedding with multiple providers
-- [x] Graph visualization web UI
-- [x] Manual knowledge linking
+- [x] Knowledge CRUD with SQLite storage
+- [x] CLI interface (`kgkb add/query/list`)
+- [x] Vector embedding with FAISS
+- [x] RESTful API (FastAPI)
+- [x] Interactive graph visualization (D3.js)
+- [x] Knowledge linking (manual + Link Mode)
+- [x] Text, semantic, and hybrid search
+- [x] Tag filtering and search-in-graph
+- [x] Import/export (JSON)
+- [x] Dark theme + responsive layout
+- [x] Keyboard shortcuts
 - [ ] AI-suggested relationships
-- [ ] Basic trend prediction
-- [ ] OpenClaw integration
-- [ ] Multi-agent swarm simulation
+- [ ] Trend prediction (graph pattern analysis)
+- [ ] OpenClaw native integration
 - [ ] Plugin system
+
+---
 
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+```bash
+# Run backend in dev mode
+python backend/run.py
+
+# Run frontend in dev mode
+cd frontend && npm run dev
+
+# Type-check frontend
+cd frontend && npx tsc --noEmit
+
+# Build production frontend
+cd frontend && npm run build
+```
+
+---
+
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- [GitNexus](https://github.com/abhigyanpatwari/GitNexus) - Code graph inspiration
-- [MiroFish](https://github.com/666ghj/MiroFish) - Swarm intelligence concepts
-- [Obsidian](https://obsidian.md) - Knowledge management UX patterns
+- [D3.js](https://d3js.org/) — Force-directed graph engine
+- [FastAPI](https://fastapi.tiangolo.com/) — Modern Python API framework
+- [FAISS](https://github.com/facebookresearch/faiss) — Vector similarity search
+- [Tailwind CSS](https://tailwindcss.com/) — Utility-first CSS
 
 ---
 
 <div align="center">
 
-**[⬆ Back to Top](#kgkb---knowledge-graph-knowledge-base)**
-
-Made with ❤️ by the AGI Super Team
+Made with 🧠 by the AGI Super Team
 
 </div>

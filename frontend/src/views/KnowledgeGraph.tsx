@@ -3,20 +3,24 @@
  *
  * Renders knowledge nodes and their relationships as an interactive graph.
  * Features:
- * - Force-directed layout with D3.js
+ * - Force-directed layout with D3.js and tag-aware clustering
  * - Nodes sized by connection count (degree)
  * - Nodes colored by primary tag
- * - Arrow markers on directed edges
+ * - Arrow markers on directed edges with labeled relation types
  * - Zoom: scroll to zoom, double-click to zoom in, shift+double-click to zoom out
  * - Pan: click-drag on background
  * - Node drag: click-drag on node repositions it within the simulation
  * - Smooth animated transitions on zoom actions
  * - Fit-to-view and reset zoom controls with keyboard shortcuts (+/-/0)
  * - Zoom level indicator
+ * - Minimap overview for large graphs with viewport indicator
+ * - Zoom-adaptive label visibility to avoid overlap
+ * - Entrance animations for nodes and edges
  * - Click-to-inspect side panel
  * - Hover highlighting with connected-node emphasis
  * - Link Mode: click two nodes to create a relation between them
  * - Tag filtering and search-in-graph highlighting
+ * - Enhanced touch support for mobile (larger targets, long-press)
  */
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
@@ -42,20 +46,6 @@ interface SimLink extends d3.SimulationLinkDatum<SimNode> {
   id: string
   type: string
   weight: number
-}
-
-/** Color palette for the most common tags. Falls back to gray. */
-const TAG_COLORS: Record<string, string> = {
-  AI: '#3b82f6',
-  tech: '#10b981',
-  finance: '#f59e0b',
-  research: '#8b5cf6',
-  project: '#ef4444',
-  idea: '#ec4899',
-  science: '#14b8a6',
-  code: '#06b6d4',
-  note: '#a3a3a3',
-  default: '#6b7280',
 }
 
 const ZOOM_MIN = 0.1
@@ -110,6 +100,121 @@ function truncLabel(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 1).trimEnd() + '…'
 }
 
+/** Minimap dimensions */
+const MINIMAP_W = 160
+const MINIMAP_H = 110
+const MINIMAP_PAD = 10
+
+/** Zoom thresholds for adaptive label display */
+const LABEL_HIDE_ZOOM = 0.35     // Below this, hide ALL labels
+const LABEL_HUBS_ONLY_ZOOM = 0.6 // Below this, only show labels for hub nodes (degree>=3)
+const HUB_DEGREE_THRESHOLD = 3
+
+/**
+ * Minimap - Small overview of the entire graph with a viewport rectangle.
+ * Shows all nodes as colored dots and a blue rect indicating the visible area.
+ */
+function Minimap({
+  nodes,
+  zoomTransform,
+  svgWidth,
+  svgHeight,
+}: {
+  nodes: SimNode[]
+  zoomTransform: d3.ZoomTransform
+  svgWidth: number
+  svgHeight: number
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || nodes.length === 0) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    // Compute bounds of all nodes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const n of nodes) {
+      if (n.x == null || n.y == null) continue
+      minX = Math.min(minX, n.x - n.radius)
+      minY = Math.min(minY, n.y - n.radius)
+      maxX = Math.max(maxX, n.x + n.radius)
+      maxY = Math.max(maxY, n.y + n.radius)
+    }
+    if (!isFinite(minX)) return
+
+    const gw = maxX - minX || 1
+    const gh = maxY - minY || 1
+    const pad = MINIMAP_PAD
+    const scaleX = (MINIMAP_W - pad * 2) / gw
+    const scaleY = (MINIMAP_H - pad * 2) / gh
+    const scale = Math.min(scaleX, scaleY)
+
+    const offsetX = pad + (MINIMAP_W - pad * 2 - gw * scale) / 2
+    const offsetY = pad + (MINIMAP_H - pad * 2 - gh * scale) / 2
+
+    // Clear
+    ctx.clearRect(0, 0, MINIMAP_W, MINIMAP_H)
+
+    // Background
+    ctx.fillStyle = 'rgba(17, 24, 39, 0.85)'
+    ctx.fillRect(0, 0, MINIMAP_W, MINIMAP_H)
+    ctx.strokeStyle = 'rgba(55, 65, 81, 0.6)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(0, 0, MINIMAP_W, MINIMAP_H)
+
+    // Draw nodes as dots
+    for (const n of nodes) {
+      if (n.x == null || n.y == null) continue
+      const mx = (n.x - minX) * scale + offsetX
+      const my = (n.y - minY) * scale + offsetY
+      const mr = Math.max(2, n.radius * scale * 0.5)
+      ctx.beginPath()
+      ctx.arc(mx, my, mr, 0, Math.PI * 2)
+      ctx.fillStyle = getNodeColor(n.tags)
+      ctx.globalAlpha = 0.8
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1.0
+
+    // Draw viewport rectangle
+    const { x: tx, y: ty, k } = zoomTransform
+    // The visible area in graph coordinates:
+    const vx1 = (-tx) / k
+    const vy1 = (-ty) / k
+    const vx2 = (svgWidth - tx) / k
+    const vy2 = (svgHeight - ty) / k
+
+    const rx = (vx1 - minX) * scale + offsetX
+    const ry = (vy1 - minY) * scale + offsetY
+    const rw = (vx2 - vx1) * scale
+    const rh = (vy2 - vy1) * scale
+
+    ctx.strokeStyle = 'rgba(96, 165, 250, 0.7)'
+    ctx.lineWidth = 1.5
+    ctx.strokeRect(
+      Math.max(0, rx),
+      Math.max(0, ry),
+      Math.min(rw, MINIMAP_W - Math.max(0, rx)),
+      Math.min(rh, MINIMAP_H - Math.max(0, ry)),
+    )
+  }, [nodes, zoomTransform, svgWidth, svgHeight])
+
+  if (nodes.length < 5) return null // Only show minimap for non-trivial graphs
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={MINIMAP_W}
+      height={MINIMAP_H}
+      className="absolute bottom-4 left-4 rounded-md pointer-events-none opacity-80
+                 transition-opacity duration-300 hover:opacity-100"
+      style={{ imageRendering: 'auto' }}
+    />
+  )
+}
+
 export function KnowledgeGraph() {
   const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -118,6 +223,8 @@ export function KnowledgeGraph() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [zoomLevel, setZoomLevel] = useState(1)
+  const [zoomTransform, setZoomTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity)
+  const [svgDimensions, setSvgDimensions] = useState({ w: 900, h: 600 })
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set())
   const [graphSearchQuery, setGraphSearchQuery] = useState('')
 
@@ -453,6 +560,8 @@ export function KnowledgeGraph() {
     // Graph container
     const g = svg.append('g').attr('class', 'graph-container')
 
+    setSvgDimensions({ w: width, h: height })
+
     // Zoom behavior
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([ZOOM_MIN, ZOOM_MAX])
@@ -460,6 +569,19 @@ export function KnowledgeGraph() {
       .on('zoom', (event) => {
         g.attr('transform', event.transform)
         setZoomLevel(event.transform.k)
+        setZoomTransform(event.transform)
+
+        // Adaptive label visibility based on zoom level
+        const k = event.transform.k
+        g.selectAll<SVGTextElement, SimNode>('.node-label')
+          .attr('opacity', d => {
+            if (k < LABEL_HIDE_ZOOM) return 0
+            if (k < LABEL_HUBS_ONLY_ZOOM) return d.degree >= HUB_DEGREE_THRESHOLD ? 0.9 : 0
+            return 1
+          })
+        // Edge labels: hide at very low zoom
+        g.selectAll<SVGTextElement, SimLink>('.edge-label-text')
+          .attr('opacity', k < LABEL_HUBS_ONLY_ZOOM ? 0 : 0.7)
       })
 
     svg.call(zoom)
@@ -496,10 +618,18 @@ export function KnowledgeGraph() {
       .data(['blur', 'SourceGraphic'])
       .join('feMergeNode').attr('in', d => d)
 
-    // Force simulation — tuned for better graph readability
+    // Force simulation — tuned for readability with tag-aware clustering
     const nodeCount = nodes.length
     const isLargeGraph = nodeCount > 30
     const chargeMult = isLargeGraph ? 0.6 : 1 // less repulsion in large graphs
+
+    // Compute tag cluster centers for tag-aware grouping
+    const uniqueTags = Array.from(new Set(nodes.flatMap(n => n.tags)))
+    const tagClusterAngle = new Map<string, number>()
+    uniqueTags.forEach((tag, i) => {
+      tagClusterAngle.set(tag, (i / uniqueTags.length) * 2 * Math.PI)
+    })
+    const clusterRadius = Math.min(width, height) * 0.2 // how far clusters spread from center
 
     const simulation = d3.forceSimulation<SimNode>(nodes)
       .force('link', d3.forceLink<SimNode, SimLink>(links)
@@ -513,34 +643,55 @@ export function KnowledgeGraph() {
       .force('charge', d3.forceManyBody()
         .strength(d => (-250 - (d as SimNode).radius * 10) * chargeMult)
         .distanceMax(isLargeGraph ? 500 : 800))
-      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.04))
+      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.03))
       .force('collision', d3.forceCollide<SimNode>()
-        .radius(d => d.radius + 12)
+        .radius(d => d.radius + 16) // extra padding for labels
         .strength(0.9)
-        .iterations(2))
-      .force('x', d3.forceX(width / 2).strength(0.025))
-      .force('y', d3.forceY(height / 2).strength(0.025))
-      .alphaDecay(0.02) // slower cooldown = better layout
-      .velocityDecay(0.3) // some momentum for smoother settling
+        .iterations(3))
+      // Tag-based clustering: gently pull nodes toward their tag's cluster center
+      .force('clusterX', d3.forceX<SimNode>(d => {
+        if (d.tags.length === 0) return width / 2
+        const angle = tagClusterAngle.get(d.tags[0]) ?? 0
+        return width / 2 + Math.cos(angle) * clusterRadius
+      }).strength(0.04))
+      .force('clusterY', d3.forceY<SimNode>(d => {
+        if (d.tags.length === 0) return height / 2
+        const angle = tagClusterAngle.get(d.tags[0]) ?? 0
+        return height / 2 + Math.sin(angle) * clusterRadius
+      }).strength(0.04))
+      .force('x', d3.forceX(width / 2).strength(0.015))
+      .force('y', d3.forceY(height / 2).strength(0.015))
+      .alphaDecay(0.018) // slightly slower cooldown for better layout convergence
+      .velocityDecay(0.35) // balanced momentum
 
     simulationRef.current = simulation
     nodesRef.current = nodes
 
-    // Render edges
+    // Render edges with entrance animation
     const link = g.append('g').attr('class', 'edges')
       .selectAll('line').data(links).join('line')
       .attr('stroke', '#4b5563')
       .attr('stroke-width', d => Math.max(1, d.weight * 2))
-      .attr('stroke-opacity', 0.6)
+      .attr('stroke-opacity', 0)
       .attr('marker-end', 'url(#arrowhead)')
+
+    // Animate edges in
+    link.transition().duration(600).delay((_d, i) => 200 + i * 15)
+      .attr('stroke-opacity', 0.6)
 
     // Edge labels — styled with a background rect for readability
     const linkLabel = g.append('g').attr('class', 'edge-labels')
       .selectAll('text').data(links).join('text')
+      .attr('class', 'edge-label-text')
       .text(d => d.type.replace(/_/g, ' '))
       .attr('font-size', '8px').attr('fill', '#6b728099')
       .attr('text-anchor', 'middle').attr('pointer-events', 'none')
       .attr('font-style', 'italic')
+      .attr('opacity', 0)
+
+    // Animate edge labels in
+    linkLabel.transition().duration(400).delay((_d, i) => 400 + i * 15)
+      .attr('opacity', 0.7)
 
     // Drag behavior
     let isDragging = false
@@ -559,21 +710,36 @@ export function KnowledgeGraph() {
         d.fx = null; d.fy = null
       })
 
-    // Render nodes
+    // Render nodes with entrance animation
     const node = g.append('g').attr('class', 'nodes')
       .selectAll<SVGGElement, SimNode>('g').data(nodes).join('g')
       .style('cursor', 'grab')
+      .attr('opacity', 0)
       .call(dragBehavior)
+
+    // Animate nodes in with staggered delay
+    node.transition().duration(500).delay((_d, i) => i * 20)
+      .attr('opacity', 1)
 
     node.on('mousedown.cursor', function () { d3.select(this).style('cursor', 'grabbing') })
     node.on('mouseup.cursor', function () { d3.select(this).style('cursor', 'grab') })
 
-    // Node circles
+    // Node circles — with invisible larger hit area for touch devices
     node.append('circle')
-      .attr('r', d => d.radius)
+      .attr('class', 'hit-area')
+      .attr('r', d => d.radius + 10) // larger invisible touch target
+      .attr('fill', 'transparent')
+      .attr('stroke', 'none')
+
+    // Visible node circle with scale-in animation
+    node.append('circle')
+      .attr('class', 'node-circle')
+      .attr('r', 0) // start at 0 for scale animation
       .attr('fill', d => getNodeColor(d.tags))
       .attr('stroke', '#1f2937').attr('stroke-width', 2)
       .attr('opacity', 0.9)
+      .transition().duration(400).delay((_d, i) => i * 20)
+      .attr('r', d => d.radius) // animate to final size
 
     // Degree badge
     node.filter(d => d.degree >= 3)
@@ -642,12 +808,12 @@ export function KnowledgeGraph() {
     node.on('mouseover', function (_event, d) {
       const neighbors = adjacency.get(d.id) || new Set<string>()
 
-      d3.select(this).select('circle')
+      d3.select(this).select('.node-circle')
         .transition().duration(150)
         .attr('r', d.radius + 4).attr('stroke', '#60a5fa')
         .attr('stroke-width', 3).attr('filter', 'url(#glow)')
 
-      node.select('circle').transition().duration(150)
+      node.select('.node-circle').transition().duration(150)
         .attr('opacity', (n: any) => (n.id === d.id || neighbors.has(n.id)) ? 1 : 0.2)
       node.select('.node-label').transition().duration(150)
         .attr('opacity', (n: any) => (n.id === d.id || neighbors.has(n.id)) ? 1 : 0.15)
@@ -669,16 +835,16 @@ export function KnowledgeGraph() {
     })
 
     node.on('mouseout', function (_event, d) {
-      d3.select(this).select('circle')
+      d3.select(this).select('.node-circle')
         .transition().duration(200)
         .attr('r', d.radius).attr('stroke', '#1f2937')
         .attr('stroke-width', 2).attr('filter', null)
 
-      node.select('circle').transition().duration(200).attr('opacity', 0.9)
+      node.select('.node-circle').transition().duration(200).attr('opacity', 0.9)
       node.selectAll('.node-label').transition().duration(200).attr('opacity', 1)
       node.selectAll('.degree-badge').transition().duration(200).attr('opacity', 1)
       link.transition().duration(200).attr('stroke-opacity', 0.6)
-      linkLabel.transition().duration(200).attr('opacity', 1)
+      linkLabel.transition().duration(200).attr('opacity', 0.7)
     })
 
     // Tick: update positions
@@ -738,14 +904,14 @@ export function KnowledgeGraph() {
     svg.selectAll<SVGTextElement, SimLink>('g.edge-labels > text')
       .transition().duration(250)
       .attr('opacity', d => {
-        if (!isFiltering) return 1
+        if (!isFiltering) return 0.7
         const src = typeof d.source === 'string' ? d.source : (d.source as SimNode).id
         const tgt = typeof d.target === 'string' ? d.target : (d.target as SimNode).id
-        return (filteredNodeIds.has(src) && filteredNodeIds.has(tgt)) ? 1 : 0.04
+        return (filteredNodeIds.has(src) && filteredNodeIds.has(tgt)) ? 0.7 : 0.04
       })
 
     // Search highlight
-    svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('circle')
+    svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('.node-circle')
       .transition().duration(200)
       .attr('stroke', d => (isSearching && searchMatchIds.has(d.id)) ? '#fbbf24' : '#1f2937')
       .attr('stroke-width', d => (isSearching && searchMatchIds.has(d.id)) ? 3.5 : 2)
@@ -767,7 +933,7 @@ export function KnowledgeGraph() {
       svg.selectAll<SVGGElement, SimNode>('g.nodes > g').style('cursor', 'crosshair')
 
       // Highlight source node with blue dashed ring
-      svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('circle')
+      svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('.node-circle')
         .transition().duration(200)
         .attr('stroke', d => (linkSourceNode && d.id === linkSourceNode.id) ? '#3b82f6' : '#1f2937')
         .attr('stroke-width', d => (linkSourceNode && d.id === linkSourceNode.id) ? 4 : 2)
@@ -775,14 +941,14 @@ export function KnowledgeGraph() {
 
       // Dim non-source nodes slightly when source is selected
       if (linkSourceNode) {
-        svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('circle')
+        svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('.node-circle')
           .transition().duration(200)
           .attr('opacity', d => d.id === linkSourceNode.id ? 1 : 0.7)
       }
     } else {
       // Reset visuals when link mode off
       svg.selectAll<SVGGElement, SimNode>('g.nodes > g').style('cursor', 'grab')
-      svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('circle')
+      svg.selectAll<SVGGElement, SimNode>('g.nodes > g').select('.node-circle')
         .transition().duration(200)
         .attr('stroke', '#1f2937').attr('stroke-width', 2)
         .attr('stroke-dasharray', 'none').attr('opacity', 0.9)
@@ -876,6 +1042,14 @@ export function KnowledgeGraph() {
         <div className="flex-1 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden relative">
           <svg ref={svgRef} width="100%" height="600" className="w-full min-h-[350px] sm:min-h-[500px]" />
 
+          {/* Minimap overview for large graphs */}
+          <Minimap
+            nodes={nodesRef.current}
+            zoomTransform={zoomTransform}
+            svgWidth={svgDimensions.w}
+            svgHeight={svgDimensions.h}
+          />
+
           {/* Zoom controls overlay */}
           <div className="absolute bottom-4 right-4 flex flex-col gap-1.5">
             <div className="text-center text-xs text-gray-400 bg-gray-900/80 rounded px-2 py-0.5 backdrop-blur-sm select-none">
@@ -891,7 +1065,7 @@ export function KnowledgeGraph() {
           <div className="absolute top-3 left-3 text-[10px] text-gray-500 leading-relaxed pointer-events-none opacity-70 select-none hidden sm:block">
             <span>Scroll: zoom · Drag: pan · Drag node: move</span><br />
             <span>Double-click: zoom in · Shift+dbl: zoom out</span><br />
-            <span>Double-click node: focus · Keys: +/−/0/F</span>
+            <span>Keys: +/−/0/F · Labels auto-hide on zoom out</span>
           </div>
           {/* Touch hints — mobile only */}
           <div className="absolute top-3 left-3 text-[10px] text-gray-500 leading-relaxed pointer-events-none opacity-70 select-none sm:hidden">
