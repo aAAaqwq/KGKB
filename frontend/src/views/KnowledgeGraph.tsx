@@ -19,9 +19,11 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
-import { api, GraphData, GraphNode, GraphEdge } from '../api/client'
+import { api, GraphData, GraphNode, GraphEdge, getErrorMessage } from '../api/client'
 import { NodeDetailPanel, NodeInfo } from '../components/NodeDetailPanel'
 import { GraphFilters, TagCount } from '../components/GraphFilters'
+import { LinkDialog } from '../components/LinkDialog'
+import { LinkModeDialog } from '../components/LinkModeDialog'
 
 /** Simulation node with degree (connection count) for sizing. */
 interface SimNode extends d3.SimulationNodeDatum {
@@ -99,12 +101,34 @@ export function KnowledgeGraph() {
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set())
   /** Search-in-graph query for highlighting matching nodes. */
   const [graphSearchQuery, setGraphSearchQuery] = useState('')
+  /** Link mode: active, source node selected, dialog showing, submitting. */
+  const [linkModeActive, setLinkModeActive] = useState(false)
+  const [linkSourceNode, setLinkSourceNode] = useState<SimNode | null>(null)
+  const [linkTargetNode, setLinkTargetNode] = useState<SimNode | null>(null)
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false)
+  const [linkSubmitting, setLinkSubmitting] = useState(false)
+  // ============ Link Mode State ============
+  /** Whether link mode is active (user is creating a relation). */
+  const [linkMode, setLinkMode] = useState(false)
+  /** First node selected in link mode (source). */
+  const [linkSource, setLinkSource] = useState<SimNode | null>(null)
+  /** Second node selected in link mode (target) — triggers dialog. */
+  const [linkTarget, setLinkTarget] = useState<SimNode | null>(null)
+  /** Whether the link creation API call is in progress. */
+  const [linkLoading, setLinkLoading] = useState(false)
+  /** Error from link creation API call. */
+  const [linkError, setLinkError] = useState<string | null>(null)
+  /** Success toast message. */
+  const [linkSuccess, setLinkSuccess] = useState<string | null>(null)
+
   /** Store current zoom behavior so reset/fit-to-view can use it. */
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null)
   /** Store the simulation ref for external control (e.g., reheat on center-to-node). */
   const simulationRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
   /** Store current SimNodes for external access (e.g., navigate-to-node). */
   const nodesRef = useRef<SimNode[]>([])
+  /** Refs for link mode state (so D3 event handlers can read current values). */
+  const linkModeRef = useRef({ active: false, sourceNode: null as SimNode | null })
 
   /** Build a map of node ID → label for the detail panel to resolve relations. */
   const nodeLabelMap = useMemo(() => {
@@ -203,6 +227,82 @@ export function KnowledgeGraph() {
     setActiveTags(new Set(['__none__']))
   }, [])
 
+  /** Toggle link mode on/off. Resets any in-progress link. */
+  const toggleLinkMode = useCallback(() => {
+    setLinkModeActive(prev => {
+      if (prev) {
+        // Turning off: reset link state
+        setLinkSourceNode(null)
+        setLinkTargetNode(null)
+        setLinkDialogOpen(false)
+      }
+      return !prev
+    })
+  }, [])
+
+  /** Cancel link mode entirely. */
+  const cancelLinkMode = useCallback(() => {
+    setLinkModeActive(false)
+    setLinkSourceNode(null)
+    setLinkTargetNode(null)
+    setLinkDialogOpen(false)
+  }, [])
+
+  /** Cancel the dialog but stay in link mode. */
+  const cancelLinkDialog = useCallback(() => {
+    setLinkTargetNode(null)
+    setLinkDialogOpen(false)
+    // Reset source too so user can start fresh
+    setLinkSourceNode(null)
+  }, [])
+
+  /** Confirm link creation: call API, update graph. */
+  const confirmLink = useCallback(async (type: string, weight: number) => {
+    if (!linkSourceNode || !linkTargetNode || !graphData) return
+
+    setLinkSubmitting(true)
+    try {
+      const relation = await api.createRelation({
+        source_id: linkSourceNode.id,
+        target_id: linkTargetNode.id,
+        type,
+        weight,
+      })
+
+      // Update graph data with the new edge so D3 re-renders
+      setGraphData(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          edges: [
+            ...prev.edges,
+            {
+              id: relation.id,
+              source: relation.source_id,
+              target: relation.target_id,
+              type: relation.type,
+              weight: relation.weight,
+            },
+          ],
+        }
+      })
+
+      // Reset link state but stay in link mode for chaining
+      setLinkSourceNode(null)
+      setLinkTargetNode(null)
+      setLinkDialogOpen(false)
+    } catch (err: any) {
+      alert(`Failed to create relation: ${err.message || 'Unknown error'}`)
+    } finally {
+      setLinkSubmitting(false)
+    }
+  }, [linkSourceNode, linkTargetNode, graphData])
+
+  /** Sync link mode state to ref so D3 event handlers read current values. */
+  useEffect(() => {
+    linkModeRef.current = { active: linkModeActive, sourceNode: linkSourceNode }
+  }, [linkModeActive, linkSourceNode])
+
   /**
    * Navigate to a specific node in the graph: center + zoom on it, and select it.
    * Used when clicking a connected node in the detail panel.
@@ -227,6 +327,91 @@ export function KnowledgeGraph() {
 
     // Select the target node
     setSelectedNode(targetNode)
+  }, [])
+
+  // ============ Link Mode Handlers ============
+
+  /** Toggle link mode on/off. Clears selection state when toggling off. */
+  const toggleLinkMode = useCallback(() => {
+    setLinkMode(prev => {
+      if (prev) {
+        // Turning off: clear link state
+        setLinkSource(null)
+        setLinkTarget(null)
+        setLinkError(null)
+      }
+      return !prev
+    })
+  }, [])
+
+  /** Cancel link mode entirely (e.g., from dialog cancel or Escape). */
+  const cancelLinkMode = useCallback(() => {
+    setLinkSource(null)
+    setLinkTarget(null)
+    setLinkError(null)
+  }, [])
+
+  /** Handle link mode node click: first click = source, second click = target. */
+  const handleLinkNodeClick = useCallback((node: SimNode) => {
+    if (!linkMode) return false // not in link mode, let normal click handle it
+
+    if (!linkSource) {
+      // First click: set source
+      setLinkSource(node)
+      setLinkError(null)
+      return true
+    }
+
+    if (node.id === linkSource.id) {
+      // Clicked same node: deselect source
+      setLinkSource(null)
+      return true
+    }
+
+    // Second click: set target and show dialog
+    setLinkTarget(node)
+    return true
+  }, [linkMode, linkSource])
+
+  /** Confirm relation creation from the dialog. */
+  const handleLinkConfirm = useCallback(async (relationType: string) => {
+    if (!linkSource || !linkTarget) return
+
+    setLinkLoading(true)
+    setLinkError(null)
+
+    try {
+      await api.createRelation({
+        source_id: linkSource.id,
+        target_id: linkTarget.id,
+        type: relationType,
+        weight: 1.0,
+      })
+
+      // Success: refresh graph data to include the new edge
+      const freshData = await api.getGraph()
+      setGraphData(freshData)
+
+      // Show success toast
+      setLinkSuccess(
+        `Linked "${linkSource.label}" → "${linkTarget.label}" (${relationType})`
+      )
+      setTimeout(() => setLinkSuccess(null), 3500)
+
+      // Reset link selection (stay in link mode for creating more links)
+      setLinkSource(null)
+      setLinkTarget(null)
+    } catch (err: unknown) {
+      setLinkError(getErrorMessage(err))
+    } finally {
+      setLinkLoading(false)
+    }
+  }, [linkSource, linkTarget])
+
+  /** Cancel the link dialog (keep link mode active, clear target). */
+  const handleLinkDialogCancel = useCallback(() => {
+    setLinkTarget(null)
+    setLinkError(null)
   }, [])
 
   // Fetch graph data from API
@@ -354,13 +539,17 @@ export function KnowledgeGraph() {
           }
           break
         case 'Escape':
-          setSelectedNode(null)
+          if (linkModeActive) {
+            cancelLinkMode()
+          } else {
+            setSelectedNode(null)
+          }
           break
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [zoomIn, zoomOut, resetZoom, fitToView])
+  }, [zoomIn, zoomOut, resetZoom, fitToView, linkModeActive, cancelLinkMode])
 
   // ============ D3 Rendering ============
   useEffect(() => {
@@ -598,10 +787,28 @@ export function KnowledgeGraph() {
       adjacency.get(tgt)!.add(src)
     }
 
-    // --- Click to select (only if not dragging) ---
+    // --- Click to select (normal mode) or link nodes (link mode) ---
     node.on('click', (_event, d) => {
       if (isDragging) return
-      setSelectedNode(prev => prev?.id === d.id ? null : d)
+
+      const lm = linkModeRef.current
+      if (lm.active) {
+        // Link mode click behavior
+        if (!lm.sourceNode) {
+          // First click: select source node
+          setLinkSourceNode(d)
+        } else if (lm.sourceNode.id === d.id) {
+          // Clicked the same node: deselect
+          setLinkSourceNode(null)
+        } else {
+          // Second click on a different node: open dialog
+          setLinkTargetNode(d)
+          setLinkDialogOpen(true)
+        }
+      } else {
+        // Normal mode: toggle detail panel
+        setSelectedNode(prev => prev?.id === d.id ? null : d)
+      }
     })
 
     // --- Double-click on node: center and zoom to it ---
@@ -793,6 +1000,55 @@ export function KnowledgeGraph() {
       })
   }, [activeTags, graphSearchQuery, filteredNodeIds, searchMatchIds, graphData])
 
+  // ============ Link Mode visual feedback ============
+  useEffect(() => {
+    if (!svgRef.current || !graphData) return
+    const svg = d3.select(svgRef.current)
+
+    if (linkModeActive) {
+      // Change cursor on all nodes to crosshair
+      svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+        .style('cursor', 'crosshair')
+
+      // Highlight source node with a pulsing ring
+      svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+        .select('circle')
+        .transition().duration(200)
+        .attr('stroke', d => {
+          if (linkSourceNode && d.id === linkSourceNode.id) return '#3b82f6' // blue for source
+          return '#1f2937'
+        })
+        .attr('stroke-width', d => {
+          if (linkSourceNode && d.id === linkSourceNode.id) return 4
+          return 2
+        })
+        .attr('stroke-dasharray', d => {
+          if (linkSourceNode && d.id === linkSourceNode.id) return '6 3'
+          return 'none'
+        })
+
+      // Dim non-source nodes slightly when source is selected
+      if (linkSourceNode) {
+        svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+          .select('circle')
+          .transition().duration(200)
+          .attr('opacity', d => d.id === linkSourceNode.id ? 1 : 0.7)
+      }
+    } else {
+      // Reset all link mode visuals
+      svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+        .style('cursor', 'grab')
+
+      svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+        .select('circle')
+        .transition().duration(200)
+        .attr('stroke', '#1f2937')
+        .attr('stroke-width', 2)
+        .attr('stroke-dasharray', 'none')
+        .attr('opacity', 0.9)
+    }
+  }, [linkModeActive, linkSourceNode, graphData])
+
   // ============ Render ============
 
   if (loading) {
@@ -811,7 +1067,52 @@ export function KnowledgeGraph() {
     <div className="relative">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">🕸️ Knowledge Graph</h1>
+        {/* Link Mode toggle */}
+        <button
+          onClick={toggleLinkMode}
+          className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all duration-200
+                     flex items-center gap-2
+                     ${linkModeActive
+              ? 'bg-blue-600/30 border-blue-500/60 text-blue-300 shadow-lg shadow-blue-500/10'
+              : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-300'
+            }`}
+          title={linkModeActive ? 'Exit Link Mode (Esc)' : 'Enter Link Mode to connect nodes'}
+        >
+          <span className={linkModeActive ? 'animate-pulse' : ''}>🔗</span>
+          {linkModeActive ? 'Linking…' : 'Link Mode'}
+        </button>
       </div>
+
+      {/* Link Mode instructions banner */}
+      {linkModeActive && (
+        <div className="bg-blue-900/30 border border-blue-500/30 rounded-lg px-4 py-2.5 mb-4
+                        flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-blue-400 text-lg">🔗</span>
+            <div>
+              {!linkSourceNode ? (
+                <span className="text-sm text-blue-300">
+                  <strong>Step 1:</strong> Click the <strong>source</strong> node
+                </span>
+              ) : (
+                <span className="text-sm text-blue-300">
+                  <strong>Step 2:</strong> Click the <strong>target</strong> node to link with
+                  <span className="ml-2 px-2 py-0.5 bg-blue-600/30 rounded text-blue-200 text-xs font-medium">
+                    {linkSourceNode.label}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={cancelLinkMode}
+            className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1
+                       border border-gray-700 hover:border-gray-500 rounded transition"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* Tag filters + search-in-graph */}
       {graphData && tagCounts.length > 0 && (
@@ -946,6 +1247,17 @@ export function KnowledgeGraph() {
 
       {error && (
         <p className="mt-2 text-xs text-yellow-500">⚠️ Using demo data — {error}</p>
+      )}
+
+      {/* Link Mode confirmation dialog */}
+      {linkDialogOpen && linkSourceNode && linkTargetNode && (
+        <LinkModeDialog
+          sourceLabel={linkSourceNode.label}
+          targetLabel={linkTargetNode.label}
+          submitting={linkSubmitting}
+          onConfirm={confirmLink}
+          onCancel={cancelLinkDialog}
+        />
       )}
     </div>
   )
