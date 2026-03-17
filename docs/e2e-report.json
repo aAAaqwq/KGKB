@@ -1,0 +1,112 @@
+{
+  "timestamp": "2026-03-17T14:13:17.657238+00:00",
+  "version": "0.1.0",
+  "results": [
+    {
+      "step": "1. Health Check",
+      "status": "\u2705 PASS",
+      "detail": "healthy | db=True | embed=False | vectors=0"
+    },
+    {
+      "step": "2. Create Knowledge Nodes (5)",
+      "status": "\u2705 PASS",
+      "detail": "Created 5 nodes: ['OpenClaw', 'FastAPI', 'FAISS', 'Knowledge Graph', 'Daniel Li & AI Team']"
+    },
+    {
+      "step": "3. Add Relations (5)",
+      "status": "\u2705 PASS",
+      "detail": "Created 5 relations"
+    },
+    {
+      "step": "4a. Text Search",
+      "status": "\u2705 PASS",
+      "detail": "Found 2 results for 'AI agent' (top: OpenClaw)"
+    },
+    {
+      "step": "4b. Semantic Search (fallback)",
+      "status": "\u2705 PASS",
+      "detail": "Semantic search: 0 results, mode=semantic"
+    },
+    {
+      "step": "4c. Hybrid Search",
+      "status": "\u2705 PASS",
+      "detail": "Hybrid search: 1 results"
+    },
+    {
+      "step": "4d. No-Results Search",
+      "status": "\u2705 PASS",
+      "detail": "Correctly returns 0 results for gibberish"
+    },
+    {
+      "step": "5a. Graph Data (full)",
+      "status": "\u2705 PASS",
+      "detail": "Graph: 5 nodes, 5 edges"
+    },
+    {
+      "step": "5b. Graph Subgraph (centered)",
+      "status": "\u2705 PASS",
+      "detail": "Subgraph: 5 nodes, 5 edges (centered on OpenClaw)"
+    },
+    {
+      "step": "6a. Export JSON",
+      "status": "\u2705 PASS",
+      "detail": "Exported: 5 entries, 5 relations"
+    },
+    {
+      "step": "6b. Export Markdown",
+      "status": "\u2705 PASS",
+      "detail": "Markdown export: 1696 chars"
+    },
+    {
+      "step": "6c. Import (round-trip)",
+      "status": "\u2705 PASS",
+      "detail": "Imported 2, skipped 1, errors: 0"
+    },
+    {
+      "step": "7a. Update Node",
+      "status": "\u2705 PASS",
+      "detail": "Updated node title and tags"
+    },
+    {
+      "step": "7b. Tag Filter",
+      "status": "\u2705 PASS",
+      "detail": "Tag filter 'import-test': 2 entries"
+    },
+    {
+      "step": "7c. List Tags",
+      "status": "\u2705 PASS",
+      "detail": "14 tags: agent, agi, ai, api, data, framework, graph, import-test, python, search..."
+    },
+    {
+      "step": "7d. Relation Types",
+      "status": "\u2705 PASS",
+      "detail": "Relation types: ['develops', 'integrates_with', 'related_to', 'uses']"
+    },
+    {
+      "step": "8a. Delete Node",
+      "status": "\u2705 PASS",
+      "detail": "Created \u2192 Deleted \u2192 Verified 404"
+    },
+    {
+      "step": "8b. Delete Relation",
+      "status": "\u2705 PASS",
+      "detail": "Deleted relation ae0b4558"
+    },
+    {
+      "step": "9. Final Stats",
+      "status": "\u2705 PASS",
+      "detail": "Knowledge: 7 | Relations: 4 | Tags: ?"
+    },
+    {
+      "step": "10. Embedding Status",
+      "status": "\u2705 PASS",
+      "detail": "Provider: ollama | Available: False"
+    }
+  ],
+  "errors": [],
+  "summary": {
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0
+  }
+}

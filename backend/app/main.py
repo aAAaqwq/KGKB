@@ -228,127 +228,6 @@ async def create_knowledge(data: KnowledgeCreate):
     return _knowledge_to_response(knowledge)
 
 
-@app.get("/api/knowledge/{kid}", response_model=KnowledgeResponse)
-async def get_knowledge(kid: str):
-    """Get a knowledge entry by ID.
-
-    Supports both full UUIDs and partial ID prefix matching.
-    """
-    if not knowledge_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    knowledge = knowledge_service.get(kid)
-    if not knowledge:
-        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
-
-    return _knowledge_to_response(knowledge)
-
-
-@app.get("/api/knowledge", response_model=PaginatedKnowledgeResponse)
-async def list_knowledge(
-    tag: Optional[str] = Query(None, description="Filter by tag"),
-    content_type: Optional[str] = Query(None, description="Filter by content type"),
-    limit: int = Query(20, ge=1, le=100, description="Max items per page"),
-    offset: int = Query(0, ge=0, description="Pagination offset"),
-):
-    """List knowledge entries with pagination, tag filter, and content type filter."""
-    if not knowledge_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    entries = knowledge_service.list(
-        tag=tag, content_type=content_type, limit=limit, offset=offset
-    )
-    total = knowledge_service.count(tag=tag)
-
-    return PaginatedKnowledgeResponse(
-        items=[_knowledge_to_response(k) for k in entries],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@app.put("/api/knowledge/{kid}", response_model=KnowledgeResponse)
-async def update_knowledge(kid: str, data: KnowledgeUpdate):
-    """Update a knowledge entry.
-
-    Only provided (non-None) fields are updated; omitted fields keep their current values.
-    Re-indexes the embedding if content changes.
-    """
-    if not knowledge_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    try:
-        knowledge = knowledge_service.update(
-            kid,
-            title=data.title,
-            content=data.content,
-            content_type=data.content_type,
-            tags=data.tags,
-            source=data.source,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update knowledge: {e}")
-
-    if not knowledge:
-        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
-
-    # Re-index embedding if content changed (best-effort)
-    if data.content is not None and vector_manager and embedding_service:
-        try:
-            embedding_vec = await embedding_service.embed_knowledge(
-                knowledge.content,
-                metadata={"tags": knowledge.tags, "source": knowledge.source, "title": knowledge.title},
-            )
-            if embedding_vec is not None:
-                # Remove old vector, add new one
-                vector_manager.store.remove(knowledge.id)
-                vector_manager.store.add(
-                    knowledge.id,
-                    embedding_vec,
-                    {"content": knowledge.content, "tags": knowledge.tags},
-                )
-                knowledge_service.record_embedding(
-                    knowledge_id=knowledge.id,
-                    provider=embedding_service.config.provider,
-                    model=embedding_service.config.model,
-                    dimension=len(embedding_vec),
-                    vector_indexed=True,
-                )
-        except Exception as e:
-            print(f"Warning: Failed to re-index knowledge {knowledge.id}: {e}")
-
-    return _knowledge_to_response(knowledge)
-
-
-@app.delete("/api/knowledge/{kid}", response_model=DeleteResponse)
-async def delete_knowledge(kid: str):
-    """Delete a knowledge entry and its relations/embeddings.
-
-    Also removes the vector from the FAISS index if present.
-    """
-    if not knowledge_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    if not knowledge_service.delete(kid):
-        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
-
-    # Remove from vector store (best-effort)
-    if vector_manager:
-        try:
-            vector_manager.store.delete_vector(kid)
-        except Exception as e:
-            print(f"Warning: Failed to remove vector for {kid}: {e}")
-
-    return DeleteResponse(status="deleted", id=kid)
-
-
-@app.get("/api/tags", response_model=List[str])
-async def list_tags():
-    """Get all unique tags across all knowledge entries."""
-    if not knowledge_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-    return knowledge_service.get_all_tags()
 
 
 # ============ Search Endpoints ============
@@ -546,6 +425,129 @@ async def search_knowledge_legacy(
     )
 
 
+
+
+@app.get("/api/knowledge/{kid}", response_model=KnowledgeResponse)
+async def get_knowledge(kid: str):
+    """Get a knowledge entry by ID.
+
+    Supports both full UUIDs and partial ID prefix matching.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    knowledge = knowledge_service.get(kid)
+    if not knowledge:
+        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
+
+    return _knowledge_to_response(knowledge)
+
+
+@app.get("/api/knowledge", response_model=PaginatedKnowledgeResponse)
+async def list_knowledge(
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+    content_type: Optional[str] = Query(None, description="Filter by content type"),
+    limit: int = Query(20, ge=1, le=100, description="Max items per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """List knowledge entries with pagination, tag filter, and content type filter."""
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    entries = knowledge_service.list(
+        tag=tag, content_type=content_type, limit=limit, offset=offset
+    )
+    total = knowledge_service.count(tag=tag)
+
+    return PaginatedKnowledgeResponse(
+        items=[_knowledge_to_response(k) for k in entries],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.put("/api/knowledge/{kid}", response_model=KnowledgeResponse)
+async def update_knowledge(kid: str, data: KnowledgeUpdate):
+    """Update a knowledge entry.
+
+    Only provided (non-None) fields are updated; omitted fields keep their current values.
+    Re-indexes the embedding if content changes.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        knowledge = knowledge_service.update(
+            kid,
+            title=data.title,
+            content=data.content,
+            content_type=data.content_type,
+            tags=data.tags,
+            source=data.source,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update knowledge: {e}")
+
+    if not knowledge:
+        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
+
+    # Re-index embedding if content changed (best-effort)
+    if data.content is not None and vector_manager and embedding_service:
+        try:
+            embedding_vec = await embedding_service.embed_knowledge(
+                knowledge.content,
+                metadata={"tags": knowledge.tags, "source": knowledge.source, "title": knowledge.title},
+            )
+            if embedding_vec is not None:
+                # Remove old vector, add new one
+                vector_manager.store.remove(knowledge.id)
+                vector_manager.store.add(
+                    knowledge.id,
+                    embedding_vec,
+                    {"content": knowledge.content, "tags": knowledge.tags},
+                )
+                knowledge_service.record_embedding(
+                    knowledge_id=knowledge.id,
+                    provider=embedding_service.config.provider,
+                    model=embedding_service.config.model,
+                    dimension=len(embedding_vec),
+                    vector_indexed=True,
+                )
+        except Exception as e:
+            print(f"Warning: Failed to re-index knowledge {knowledge.id}: {e}")
+
+    return _knowledge_to_response(knowledge)
+
+
+@app.delete("/api/knowledge/{kid}", response_model=DeleteResponse)
+async def delete_knowledge(kid: str):
+    """Delete a knowledge entry and its relations/embeddings.
+
+    Also removes the vector from the FAISS index if present.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    if not knowledge_service.delete(kid):
+        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
+
+    # Remove from vector store (best-effort)
+    if vector_manager:
+        try:
+            vector_manager.store.delete_vector(kid)
+        except Exception as e:
+            print(f"Warning: Failed to remove vector for {kid}: {e}")
+
+    return DeleteResponse(status="deleted", id=kid)
+
+
+@app.get("/api/tags", response_model=List[str])
+async def list_tags():
+    """Get all unique tags across all knowledge entries."""
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return knowledge_service.get_all_tags()
 # ============ Graph Endpoints ============
 
 @app.get("/api/graph", response_model=GraphData)
