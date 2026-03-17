@@ -323,10 +323,18 @@ async def search_knowledge(
 
 @app.get("/api/graph", response_model=GraphData)
 async def get_graph(
-    depth: int = Query(2, le=5),
-    node_id: Optional[str] = Query(None),
+    depth: int = Query(2, ge=1, le=5),
+    node_id: Optional[str] = Query(None, description="Center node for subgraph (BFS)"),
 ):
-    """Get graph data for visualization."""
+    """Get graph data for visualization.
+
+    Without node_id: returns the full graph (all nodes + edges).
+    With node_id: returns a subgraph around that node, expanding via BFS
+    up to the specified depth.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
     nodes, edges = knowledge_service.get_graph(center_id=node_id, depth=depth)
 
     return GraphData(
@@ -355,42 +363,137 @@ async def get_graph(
 
 # ============ Relations Endpoints ============
 
-@app.post("/api/relations", response_model=Relation)
-async def create_relation(data: RelationCreate):
-    """Create a relationship between knowledge entries."""
-    relation = knowledge_service.create_relation(
-        source_id=data.source_id,
-        target_id=data.target_id,
-        type=data.type,
-        weight=data.weight,
+class RelationResponse(BaseModel):
+    """Response model for a single relation."""
+    id: str
+    source_id: str
+    target_id: str
+    type: str
+    weight: float
+    created_at: str
+
+
+class RelationListResponse(BaseModel):
+    """Response model for relation list."""
+    items: List[RelationResponse]
+    total: int
+    node_id: Optional[str] = None
+
+
+def _relation_to_response(r) -> RelationResponse:
+    """Convert a RelationEntry to a RelationResponse."""
+    return RelationResponse(
+        id=r.id,
+        source_id=r.source_id,
+        target_id=r.target_id,
+        type=r.type,
+        weight=r.weight,
+        created_at=r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
     )
-    if not relation:
-        raise HTTPException(status_code=400, detail="Failed to create relation")
-
-    return relation
 
 
-@app.get("/api/relations")
+@app.post("/api/relations", response_model=RelationResponse, status_code=201)
+async def create_relation(data: RelationCreate):
+    """Create a relationship between two knowledge entries.
+
+    Validates that both source and target nodes exist.
+    Rejects self-relations and duplicate relations (same source, target, type).
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        relation = knowledge_service.create_relation(
+            source_id=data.source_id,
+            target_id=data.target_id,
+            type=data.type,
+            weight=data.weight,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return _relation_to_response(relation)
+
+
+@app.get("/api/relations", response_model=RelationListResponse)
 async def list_relations(
     node_id: Optional[str] = Query(None, description="Filter relations by node ID"),
+    type: Optional[str] = Query(None, description="Filter by relation type"),
     limit: int = Query(50, ge=1, le=200),
 ):
-    """List relationships, optionally filtered by node ID."""
+    """List relationships, optionally filtered by node ID and/or relation type.
+
+    When node_id is provided, returns all relations where the node appears
+    as either source or target.
+    """
     if not knowledge_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
     if node_id:
         relations = knowledge_service.get_relations_for_node(node_id)
-        return relations[:limit]
-    return knowledge_service.list_relations(limit=limit)
+    else:
+        relations = knowledge_service.list_relations(limit=limit)
+
+    # Apply optional type filter
+    if type:
+        relations = [r for r in relations if r.type == type]
+
+    # Apply limit for node-filtered results
+    relations = relations[:limit]
+
+    return RelationListResponse(
+        items=[_relation_to_response(r) for r in relations],
+        total=len(relations),
+        node_id=node_id,
+    )
 
 
-@app.delete("/api/relations/{rid}")
+@app.get("/api/relations/types", response_model=List[str])
+async def list_relation_types():
+    """Get all distinct relation types currently in use.
+
+    Useful for populating dropdown/select options when creating new relations.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return knowledge_service.get_relation_types()
+
+
+@app.get("/api/relations/{rid}", response_model=RelationResponse)
+async def get_relation(rid: str):
+    """Get a single relation by ID.
+
+    Supports both full UUIDs and partial ID prefix matching.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    relation = knowledge_service.get_relation(rid)
+    if not relation:
+        raise HTTPException(status_code=404, detail=f"Relation not found: {rid}")
+
+    return _relation_to_response(relation)
+
+
+@app.delete("/api/relations/{rid}", response_model=DeleteResponse)
 async def delete_relation(rid: str):
-    """Delete a relationship."""
+    """Delete a relationship by its ID.
+
+    Supports both full UUID and partial ID prefix matching.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
     if not knowledge_service.delete_relation(rid):
-        raise HTTPException(status_code=404, detail="Relation not found")
-    return {"status": "deleted"}
+        raise HTTPException(status_code=404, detail=f"Relation not found: {rid}")
+
+    return DeleteResponse(status="deleted", id=rid)
 
 
 # ============ Health Check ============

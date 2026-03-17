@@ -579,24 +579,39 @@ class KnowledgeService:
         target_id: str,
         type: str = "relates_to",
         weight: float = 1.0,
-    ) -> Optional[RelationEntry]:
-        """Create a relationship between two knowledge entries."""
+    ) -> RelationEntry:
+        """
+        Create a relationship between two knowledge entries.
+
+        Raises:
+            ValueError: If source_id == target_id (self-relation).
+            KeyError: If source or target node does not exist.
+            FileExistsError: If an identical relation already exists.
+            RuntimeError: On database integrity errors.
+        """
         conn = self._get_conn()
 
         # Resolve partial IDs
-        source_id = self._resolve_id(conn, source_id)
-        target_id = self._resolve_id(conn, target_id)
+        resolved_source = self._resolve_id(conn, source_id)
+        resolved_target = self._resolve_id(conn, target_id)
 
-        if not source_id or not target_id:
-            return None
+        if not resolved_source:
+            raise KeyError(f"Source node not found: {source_id}")
+        if not resolved_target:
+            raise KeyError(f"Target node not found: {target_id}")
 
-        # Check for duplicate relation
+        if resolved_source == resolved_target:
+            raise ValueError("Cannot create a self-relation (source == target)")
+
+        # Check for duplicate relation (same source, target, and type)
         cursor = conn.execute(
             "SELECT id FROM relations WHERE source_id = ? AND target_id = ? AND type = ?",
-            (source_id, target_id, type),
+            (resolved_source, resolved_target, type),
         )
         if cursor.fetchone():
-            return None  # Duplicate
+            raise FileExistsError(
+                f"Relation already exists: {resolved_source[:8]}… → {resolved_target[:8]}… ({type})"
+            )
 
         rid = str(uuid4())
         now = datetime.utcnow().isoformat()
@@ -607,20 +622,34 @@ class KnowledgeService:
                 INSERT INTO relations (id, source_id, target_id, type, weight, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (rid, source_id, target_id, type, weight, now),
+                (rid, resolved_source, resolved_target, type, weight, now),
             )
             conn.commit()
 
             return RelationEntry(
                 id=rid,
-                source_id=source_id,
-                target_id=target_id,
+                source_id=resolved_source,
+                target_id=resolved_target,
                 type=type,
                 weight=weight,
                 created_at=datetime.fromisoformat(now),
             )
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as e:
+            raise RuntimeError(f"Database integrity error creating relation: {e}")
+
+    def get_relation(self, rid: str) -> Optional[RelationEntry]:
+        """Get a single relation by ID (supports partial ID matching)."""
+        conn = self._get_conn()
+
+        if len(rid) < 36:
+            cursor = conn.execute("SELECT * FROM relations WHERE id LIKE ?", (f"{rid}%",))
+        else:
+            cursor = conn.execute("SELECT * FROM relations WHERE id = ?", (rid,))
+
+        row = cursor.fetchone()
+        if not row:
             return None
+        return self._row_to_relation(row)
 
     def get_relations_for_node(self, node_id: str) -> List[RelationEntry]:
         """Get all relations connected to a specific node."""
@@ -659,6 +688,12 @@ class KnowledgeService:
         conn = self._get_conn()
         cursor = conn.execute("SELECT COUNT(*) FROM relations")
         return cursor.fetchone()[0]
+
+    def get_relation_types(self) -> List[str]:
+        """Get all distinct relation types currently in use."""
+        conn = self._get_conn()
+        cursor = conn.execute("SELECT DISTINCT type FROM relations ORDER BY type")
+        return [row["type"] for row in cursor.fetchall()]
 
     # ============ Graph ============
 
