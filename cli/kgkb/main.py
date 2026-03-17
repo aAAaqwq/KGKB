@@ -1071,6 +1071,147 @@ def export(
         rprint(output_data)
 
 
+@app.command("import")
+def import_data(
+    file: Path = typer.Argument(
+        ...,
+        help="JSON file to import (array of knowledge items, or export format with 'knowledge' key)",
+        exists=True,
+        readable=True,
+    ),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
+):
+    """Import knowledge entries from a JSON file via the backend API.
+
+    Accepts two JSON formats:
+      1. Simple array: [{\"title\": \"...\", \"content\": \"...\"}, ...]
+      2. Export format: {\"knowledge\": [{...}, ...], \"relations\": [{...}, ...]}
+
+    Each item should have at least a 'content' field. Optional fields:
+    title, content_type (text/url/markdown), tags (list), source.
+
+    Existing entries are not deduplicated — all items are created as new entries.
+    Relations from export format are re-created if both endpoints exist.
+
+    Examples:
+        kgkb import backup.json
+        kgkb import notes.json --force
+        kgkb import exported_data.json --json
+    """
+    # --- Parse input file ---
+    try:
+        raw = file.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        console.print(f"❌ Invalid JSON in {file}: {e}", style="red")
+        raise typer.Exit(1)
+    except OSError as e:
+        console.print(f"❌ Failed to read file: {e}", style="red")
+        raise typer.Exit(1)
+
+    # Normalize: support both array format and export format
+    items: list = []
+    relations: list = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        if "knowledge" in data:
+            items = data["knowledge"]
+            relations = data.get("relations", [])
+        elif "items" in data:
+            items = data["items"]
+        else:
+            console.print(
+                "❌ Unrecognized JSON structure. Expected an array or an object with 'knowledge' key.",
+                style="red",
+            )
+            raise typer.Exit(1)
+    else:
+        console.print("❌ JSON root must be an array or object.", style="red")
+        raise typer.Exit(1)
+
+    if not items:
+        console.print("⚠️  No items found in the file.", style="yellow")
+        raise typer.Exit(0)
+
+    # --- Preview and confirm ---
+    console.print(f"\n📦 Import file: [bold]{file}[/bold]")
+    console.print(f"   📝 Knowledge items: {len(items)}")
+    if relations:
+        console.print(f"   🔗 Relations: {len(relations)}")
+
+    # Show a few samples
+    console.print("\n   Sample entries:")
+    for item in items[:3]:
+        title = item.get("title", "")
+        content = item.get("content", "")[:60].replace("\n", " ")
+        tags = item.get("tags", [])
+        tag_str = f" [{', '.join(tags[:3])}]" if tags else ""
+        console.print(f"     • {title or content}{tag_str}")
+    if len(items) > 3:
+        console.print(f"     ... and {len(items) - 3} more")
+
+    if not force:
+        confirm = typer.confirm(f"\nImport {len(items)} items?", default=True)
+        if not confirm:
+            console.print("Cancelled.", style="dim")
+            raise typer.Exit(0)
+
+    # --- Send to backend API ---
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
+
+        # Prepare import payload (normalize to ImportItem schema)
+        import_items = []
+        for item in items:
+            import_items.append({
+                "title": item.get("title", ""),
+                "content": item.get("content", ""),
+                "content_type": item.get("content_type", "text"),
+                "tags": item.get("tags", []),
+                "source": item.get("source"),
+            })
+
+        try:
+            response = client.post("/api/import", json=import_items, timeout=120.0)
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+
+        handle_api_error(response, "import knowledge")
+        result = response.json()
+
+    imported_count = result.get("imported", 0)
+    skipped_count = result.get("skipped", 0)
+    errors = result.get("errors", [])
+
+    if output_json:
+        rprint(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    console.print(f"\n✅ Import complete:", style="green")
+    console.print(f"   📥 Imported: [bold green]{imported_count}[/bold green]")
+    if skipped_count:
+        console.print(f"   ⏭️  Skipped:  {skipped_count} (empty content)")
+    if errors:
+        console.print(f"   ❌ Errors:   {len(errors)}", style="red")
+        for err in errors[:5]:
+            console.print(f"      • {err}", style="dim red")
+        if len(errors) > 5:
+            console.print(f"      ... and {len(errors) - 5} more errors", style="dim red")
+
+    if relations:
+        console.print(f"\n   ⚠️  Relations from export not auto-imported (IDs differ).", style="yellow")
+        console.print(f"       Use 'kgkb link' to recreate relationships.", style="dim")
+
+
 @app.command()
 def web(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind"),

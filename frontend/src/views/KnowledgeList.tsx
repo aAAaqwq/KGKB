@@ -13,7 +13,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { api, KnowledgeEntry, PaginatedKnowledgeResponse } from '../api/client'
+import { api, KnowledgeEntry, KnowledgeCreatePayload, PaginatedKnowledgeResponse } from '../api/client'
 
 const PAGE_SIZE = 12
 
@@ -69,6 +69,12 @@ export function KnowledgeList() {
   const [offset, setOffset] = useState(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null)
+
+  // Hidden file input for import
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Debounce timer for search
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -177,6 +183,91 @@ export function KnowledgeList() {
     }
   }
 
+  /** Export all knowledge as a JSON file download. */
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const data = await api.exportKnowledge('json')
+      const json = JSON.stringify(data, null, 2)
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const now = new Date().toISOString().slice(0, 10)
+      a.download = `kgkb-export-${now}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Export failed:', err)
+      alert('Failed to export data. Please try again.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  /** Handle file selection for import. */
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Reset file input so the same file can be re-selected
+    e.target.value = ''
+
+    setImporting(true)
+    setImportResult(null)
+
+    try {
+      const text = await file.text()
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        alert('Invalid JSON file. Please select a valid JSON file.')
+        setImporting(false)
+        return
+      }
+
+      // Normalize: support array or export format
+      let items: KnowledgeCreatePayload[] = []
+      if (Array.isArray(parsed)) {
+        items = parsed
+      } else if (parsed && typeof parsed === 'object' && 'knowledge' in parsed) {
+        items = (parsed as { knowledge: KnowledgeCreatePayload[] }).knowledge
+      } else if (parsed && typeof parsed === 'object' && 'items' in parsed) {
+        items = (parsed as { items: KnowledgeCreatePayload[] }).items
+      } else {
+        alert('Unrecognized JSON structure. Expected an array or an object with a "knowledge" key.')
+        setImporting(false)
+        return
+      }
+
+      if (items.length === 0) {
+        alert('No items found in the file.')
+        setImporting(false)
+        return
+      }
+
+      if (!confirm(`Import ${items.length} knowledge items?`)) {
+        setImporting(false)
+        return
+      }
+
+      const result = await api.importKnowledge(items)
+      setImportResult(result as { imported: number; skipped: number; errors: string[] })
+
+      // Refresh the list and tags
+      loadEntries()
+      api.listTags().then(setAllTags).catch(() => {})
+    } catch (err) {
+      console.error('Import failed:', err)
+      alert('Failed to import data. Please try again.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   // --- Pagination ---
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1
@@ -197,8 +288,50 @@ export function KnowledgeList() {
           </p>
         </div>
 
-        {/* Search bar */}
-        <div className="relative w-full sm:w-80">
+        <div className="flex items-center gap-3">
+          {/* Import / Export buttons */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept=".json"
+            onChange={handleImportFile}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="px-3 py-2 text-sm rounded-lg border border-gray-700 text-gray-300
+                       hover:bg-gray-800 hover:border-gray-600 transition
+                       disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            {importing ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin inline-block" />
+                Importing…
+              </>
+            ) : (
+              <>📥 Import</>
+            )}
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={exporting || total === 0}
+            className="px-3 py-2 text-sm rounded-lg border border-gray-700 text-gray-300
+                       hover:bg-gray-800 hover:border-gray-600 transition
+                       disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            {exporting ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin inline-block" />
+                Exporting…
+              </>
+            ) : (
+              <>📤 Export</>
+            )}
+          </button>
+
+          {/* Search bar */}
+          <div className="relative w-full sm:w-80">
           <svg
             className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
             fill="none"
@@ -230,7 +363,29 @@ export function KnowledgeList() {
             </button>
           )}
         </div>
+        </div>
       </div>
+
+      {/* Import result banner */}
+      {importResult && (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 flex items-center justify-between">
+          <div className="text-sm">
+            <span className="text-green-400 font-medium">✅ Imported {importResult.imported} entries</span>
+            {importResult.skipped > 0 && (
+              <span className="text-gray-400 ml-3">⏭️ {importResult.skipped} skipped</span>
+            )}
+            {importResult.errors.length > 0 && (
+              <span className="text-red-400 ml-3">❌ {importResult.errors.length} errors</span>
+            )}
+          </div>
+          <button
+            onClick={() => setImportResult(null)}
+            className="text-gray-500 hover:text-gray-300 text-sm ml-4"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Tag filter chips */}
       {allTags.length > 0 && (

@@ -394,8 +394,8 @@ export const api = {
   // ---------- Import / Export ----------
 
   /** Import knowledge entries from a JSON array. */
-  async importKnowledge(items: KnowledgeCreatePayload[]): Promise<{ imported: number }> {
-    const { data } = await http.post<{ imported: number }>('/api/import', items)
+  async importKnowledge(items: KnowledgeCreatePayload[]): Promise<{ imported: number; skipped: number; errors: string[] }> {
+    const { data } = await http.post<{ imported: number; skipped: number; errors: string[] }>('/api/import', items)
     return data
   },
 

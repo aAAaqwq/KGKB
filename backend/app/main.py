@@ -785,6 +785,215 @@ async def get_stats():
     return knowledge_service.get_stats()
 
 
+# ============ Import / Export Endpoints ============
+
+class ImportItem(BaseModel):
+    """A single item in an import payload."""
+    title: Optional[str] = ""
+    content: str
+    content_type: Optional[str] = "text"
+    tags: Optional[List[str]] = []
+    source: Optional[str] = None
+
+
+class ImportResponse(BaseModel):
+    """Response from import operation."""
+    imported: int
+    skipped: int
+    errors: List[str]
+
+
+class ExportData(BaseModel):
+    """Full export payload."""
+    knowledge: List[dict]
+    relations: List[dict]
+    exported_at: str
+    stats: dict
+
+
+@app.post("/api/import", response_model=ImportResponse, status_code=201)
+async def import_knowledge(items: List[ImportItem]):
+    """Import knowledge entries from a JSON array.
+
+    Accepts a list of knowledge items and creates them in the database.
+    Skips items with empty content. Returns count of imported, skipped,
+    and any errors encountered.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    imported = 0
+    skipped = 0
+    errors: List[str] = []
+
+    for i, item in enumerate(items):
+        # Skip empty content
+        if not item.content or not item.content.strip():
+            skipped += 1
+            continue
+
+        try:
+            knowledge = knowledge_service.create(
+                content=item.content,
+                title=item.title or "",
+                content_type=item.content_type or "text",
+                tags=item.tags or [],
+                source=item.source,
+            )
+
+            # Auto-embed (best-effort, don't block import on embedding failures)
+            if vector_manager and embedding_service:
+                try:
+                    embedding_vec = await embedding_service.embed_knowledge(
+                        knowledge.content,
+                        metadata={"tags": knowledge.tags, "source": knowledge.source, "title": knowledge.title},
+                    )
+                    if embedding_vec is not None:
+                        vector_manager.store.add(
+                            knowledge.id,
+                            embedding_vec,
+                            {"content": knowledge.content, "tags": knowledge.tags},
+                        )
+                        knowledge_service.record_embedding(
+                            knowledge_id=knowledge.id,
+                            provider=embedding_service.config.provider,
+                            model=embedding_service.config.model,
+                            dimension=len(embedding_vec),
+                            vector_indexed=True,
+                        )
+                except Exception as e:
+                    print(f"Warning: Failed to embed imported item {knowledge.id[:8]}: {e}")
+
+            imported += 1
+        except Exception as e:
+            errors.append(f"Item {i}: {str(e)}")
+
+    return ImportResponse(imported=imported, skipped=skipped, errors=errors)
+
+
+@app.get("/api/export")
+async def export_knowledge(
+    format: str = Query("json", pattern="^(json|markdown)$", description="Export format: json or markdown"),
+):
+    """Export all knowledge entries and relations.
+
+    Formats:
+    - **json**: Complete JSON with knowledge entries, relations, and metadata.
+    - **markdown**: Human-readable markdown document with all entries and relations.
+
+    Returns the export data directly as JSON (for json format) or as a text
+    response (for markdown format).
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    from datetime import datetime as dt
+    from fastapi.responses import PlainTextResponse
+
+    # Collect all knowledge entries (paginated internally)
+    all_entries = []
+    offset = 0
+    page_size = 100
+    while True:
+        batch = knowledge_service.list(limit=page_size, offset=offset)
+        if not batch:
+            break
+        all_entries.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    # Collect all relations
+    all_relations = knowledge_service.list_relations(limit=10000)
+
+    now_str = dt.utcnow().isoformat()
+
+    if format == "json":
+        knowledge_data = [
+            {
+                "id": k.id,
+                "title": k.title,
+                "content": k.content,
+                "content_type": k.content_type,
+                "tags": k.tags,
+                "source": k.source,
+                "created_at": k.created_at.isoformat(),
+                "updated_at": k.updated_at.isoformat(),
+            }
+            for k in all_entries
+        ]
+        relation_data = [
+            {
+                "id": r.id,
+                "source_id": r.source_id,
+                "target_id": r.target_id,
+                "type": r.type,
+                "weight": r.weight,
+                "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+            }
+            for r in all_relations
+        ]
+        return {
+            "knowledge": knowledge_data,
+            "relations": relation_data,
+            "exported_at": now_str,
+            "stats": {
+                "knowledge_count": len(knowledge_data),
+                "relation_count": len(relation_data),
+            },
+        }
+
+    elif format == "markdown":
+        # Build markdown document
+        lines = [
+            "# KGKB Knowledge Export",
+            "",
+            f"Exported: {now_str}",
+            f"Entries: {len(all_entries)} | Relations: {len(all_relations)}",
+            "",
+            "---",
+            "",
+        ]
+
+        # Build relation lookup
+        relations_by_node: Dict[str, list] = {}
+        for r in all_relations:
+            relations_by_node.setdefault(r.source_id, []).append(r)
+            relations_by_node.setdefault(r.target_id, []).append(r)
+
+        for entry in all_entries:
+            title = entry.title or "(untitled)"
+            lines.append(f"## {title}")
+            lines.append("")
+            lines.append(f"- **ID**: `{entry.id[:8]}`")
+            lines.append(f"- **Type**: {entry.content_type}")
+            if entry.tags:
+                lines.append(f"- **Tags**: {', '.join(entry.tags)}")
+            if entry.source:
+                lines.append(f"- **Source**: {entry.source}")
+            lines.append(f"- **Created**: {entry.created_at.isoformat()[:10]}")
+            lines.append("")
+            lines.append(entry.content)
+            lines.append("")
+
+            # Relations
+            node_rels = relations_by_node.get(entry.id, [])
+            if node_rels:
+                lines.append("### Relations")
+                lines.append("")
+                for r in node_rels:
+                    if r.source_id == entry.id:
+                        lines.append(f"- → **{r.type}** → `{r.target_id[:8]}`")
+                    else:
+                        lines.append(f"- ← **{r.type}** ← `{r.source_id[:8]}`")
+                lines.append("")
+
+            lines.append("---")
+            lines.append("")
+
+        return PlainTextResponse(content="\n".join(lines), media_type="text/markdown")
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
