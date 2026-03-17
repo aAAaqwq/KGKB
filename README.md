@@ -54,40 +54,75 @@ KGKB is a **local-first** knowledge management system that stores your knowledge
 - **Node.js 18+** — Frontend build
 - **SQLite3** — Included with Python
 
-### Installation
+### Quick Start (One Command)
 
 ```bash
-# Clone the repository
+git clone https://github.com/aAAaqwq/KGKB.git
+cd KGKB
+./start.sh
+```
+
+That's it. The script creates a Python venv, installs all dependencies, and starts both servers:
+
+| Service | URL |
+|---------|-----|
+| **Web UI** | http://localhost:5173 |
+| **API** | http://localhost:8000 |
+| **API Docs** | http://localhost:8000/docs |
+
+Press `Ctrl+C` to stop everything.
+
+### Manual Installation
+
+```bash
+# Clone
 git clone https://github.com/aAAaqwq/KGKB.git
 cd KGKB
 
-# Set up backend
+# Backend (use a virtualenv)
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# Set up frontend
+# Frontend
 cd frontend && npm install && cd ..
 ```
 
-### Run
+### Manual Run
 
 ```bash
-# Start the backend API server
-python backend/run.py
-# → Runs on http://localhost:8000
+# Terminal 1: Backend
+source venv/bin/activate
+python backend/run.py --reload
+# → http://localhost:8000
 
-# In another terminal, start the frontend dev server
+# Terminal 2: Frontend
 cd frontend && npm run dev
-# → Runs on http://localhost:5173
+# → http://localhost:5173
 ```
 
-### Production Build
+### Production (Docker)
 
 ```bash
-# Build the frontend
-cd frontend && npm run build
+# Start with Docker Compose
+./start-prod.sh
 
-# The built files go to frontend/dist/
-# The backend can serve them as static files
+# Or with custom ports
+KGKB_FRONTEND_PORT=80 KGKB_BACKEND_PORT=9000 ./start-prod.sh
+
+# Force rebuild after code changes
+./start-prod.sh --build
+
+# View logs / status / stop
+./start-prod.sh --logs
+./start-prod.sh --status
+./start-prod.sh --stop
+```
+
+### Build Frontend for Production
+
+```bash
+cd frontend && npm run build
+# Output: frontend/dist/ (serve with any static file server)
 ```
 
 ---
@@ -96,26 +131,52 @@ cd frontend && npm run build
 
 ### CLI
 
+The CLI works directly against the SQLite database (no server needed).
+
 ```bash
-# Add knowledge
-kgkb add "OpenAI released GPT-5 with 10x reasoning capability" \
-  --tags "AI,GPT,OpenAI" \
-  --source "https://openai.com/blog/gpt5"
+# ── Add Knowledge ──────────────────────────────────
+# From text
+kgkb add "Transformers use self-attention for sequence modeling" \
+  --tags "ML,NLP,architecture" \
+  --source "https://arxiv.org/abs/1706.03762"
 
-# Semantic search
-kgkb query "latest AI developments" --limit 10
+# From a file
+kgkb add --file notes/paper-summary.md --tags "research,summary"
 
-# List by tag
-kgkb list --tag "AI"
+# Specify content type
+kgkb add "https://example.com/tutorial" --type url --tags "tutorial"
 
-# Link two entries
-kgkb link <id1> <id2> --type "relates_to"
+# ── Search ─────────────────────────────────────────
+# Semantic search (requires embedding service)
+kgkb query "how do neural networks learn representations" --limit 5
 
-# Export all data
-kgkb export --format json
+# Text search (works without embeddings)
+kgkb search "transformer" --json   # JSON output for scripting
 
-# Start web server
-kgkb web
+# ── Browse ─────────────────────────────────────────
+kgkb list                          # All entries (paginated)
+kgkb list --tag "ML" --limit 20   # Filter by tag
+
+# ── Link Knowledge ─────────────────────────────────
+kgkb link abc123 def456 --type "builds_on"
+kgkb relations abc123             # Show all connections
+kgkb unlink abc123 def456        # Remove a link
+
+# ── Manage ─────────────────────────────────────────
+kgkb delete abc123               # Delete (with confirmation)
+
+# ── Import / Export ────────────────────────────────
+kgkb export --format json > backup.json
+kgkb import backup.json
+
+# ── Configuration ──────────────────────────────────
+kgkb config                       # Show current config
+kgkb config --embedding-provider ollama
+kgkb config --embedding-model "qwen3-embedding:0.6b"
+kgkb config --embedding-endpoint "http://localhost:11434"
+
+# ── Web Server ─────────────────────────────────────
+kgkb web                          # Starts backend on :8000
 ```
 
 ### Web UI
@@ -254,33 +315,62 @@ Full API documentation: **[docs/API.md](docs/API.md)**
 
 ## Configuration
 
-Create `~/.kgkb/config.yaml`:
+KGKB stores its data and config in `~/.kgkb/`:
 
-```yaml
-# Embedding provider configuration
-embedding:
-  provider: ollama           # openai | ollama | local
-  model: nomic-embed-text    # Model name
-  endpoint: http://localhost:11434  # For ollama/local
-
-# Database location
-database:
-  path: ~/.kgkb/kgkb.db
-
-# Vector store
-vector:
-  backend: faiss             # faiss | chroma
-  dimension: 768             # Must match embedding model
 ```
+~/.kgkb/
+├── config.json       # Main configuration (auto-created on first run)
+├── data.db           # SQLite database
+└── vectors.faiss     # FAISS vector index
+```
+
+### Config File (`~/.kgkb/config.json`)
+
+Auto-created on first run. Edit directly or use `kgkb config`:
+
+```json
+{
+  "embedding": {
+    "provider": "ollama",
+    "model": "qwen3-embedding:0.6b",
+    "endpoint": "http://localhost:11434",
+    "dimension": 1024,
+    "api_key": null
+  },
+  "database": {
+    "path": "~/.kgkb/data.db"
+  },
+  "vector": {
+    "backend": "faiss",
+    "dimension": 1024
+  }
+}
+```
+
+### Embedding Providers
+
+| Provider | Config | Notes |
+|----------|--------|-------|
+| **Ollama** (default) | `provider: "ollama"` | Free, local. Install [Ollama](https://ollama.ai), then `ollama pull qwen3-embedding:0.6b` |
+| **OpenAI** | `provider: "openai"`, set `api_key` | Requires API key. Uses `text-embedding-3-small` by default |
+| **Custom** | `provider: "custom"`, set `endpoint` | Any OpenAI-compatible embedding API |
+
+> **Note**: Semantic search requires a running embedding service. Text search and all other features work without one.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KGKB_DB_PATH` | `~/.kgkb/kgkb.db` | SQLite database path |
+| `KGKB_DATA_DIR` | `~/.kgkb` | Data directory (useful for Docker) |
+| `KGKB_DB_PATH` | `~/.kgkb/data.db` | SQLite database path |
+| `KGKB_HOST` | `0.0.0.0` | Backend bind host |
+| `KGKB_PORT` | `8000` | Backend bind port |
+| `KGKB_LOG_LEVEL` | `info` | Log level (`debug`/`info`/`warning`/`error`) |
 | `KGKB_EMBEDDING_PROVIDER` | `ollama` | Embedding provider |
-| `KGKB_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model |
+| `KGKB_EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Embedding model |
 | `KGKB_EMBEDDING_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
+| `KGKB_BACKEND_PORT` | `8000` | Docker: backend exposed port |
+| `KGKB_FRONTEND_PORT` | `3000` | Docker: frontend exposed port |
 
 ---
 
@@ -304,23 +394,33 @@ vector:
 
 ---
 
-## Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+## Development
 
 ```bash
-# Run backend in dev mode
-python backend/run.py
+# Quick start (installs deps + starts servers with hot reload)
+./start.sh
 
-# Run frontend in dev mode
-cd frontend && npm run dev
+# Or start individually:
+./start.sh --backend    # Backend only (with auto-reload)
+./start.sh --frontend   # Frontend only
+./start.sh --install    # Install deps without starting
 
 # Type-check frontend
 cd frontend && npx tsc --noEmit
 
+# Lint Python
+ruff check backend/ cli/
+
+# Run tests
+python -m pytest tests/
+
 # Build production frontend
 cd frontend && npm run build
 ```
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
