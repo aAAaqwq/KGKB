@@ -7,10 +7,14 @@
  * - Nodes sized by connection count (degree)
  * - Nodes colored by primary tag
  * - Arrow markers on directed edges
- * - Zoom, pan, and node drag interactions
+ * - Zoom: scroll to zoom, double-click to zoom in, shift+double-click to zoom out
+ * - Pan: click-drag on background
+ * - Node drag: click-drag on node repositions it within the simulation
+ * - Smooth animated transitions on zoom actions
+ * - Fit-to-view and reset zoom controls with keyboard shortcuts (+/-/0)
+ * - Zoom level indicator
  * - Click-to-inspect side panel
  * - Hover highlighting with connected-node emphasis
- * - Fit-to-view and reset zoom controls
  */
 
 import React, { useRef, useEffect, useState, useCallback } from 'react'
@@ -50,6 +54,12 @@ const TAG_COLORS: Record<string, string> = {
   default: '#6b7280',
 }
 
+/** Zoom constraints */
+const ZOOM_MIN = 0.1
+const ZOOM_MAX = 6
+const ZOOM_STEP = 1.5 // multiplier per zoom-in/out action
+const TRANSITION_MS = 400 // default animation duration
+
 /** Return the color for a node based on its first matching tag. */
 function getNodeColor(tags: string[]): string {
   for (const tag of tags) {
@@ -81,8 +91,12 @@ export function KnowledgeGraph() {
   const [selectedNode, setSelectedNode] = useState<SimNode | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  /** Store current zoom transform so reset/fit-to-view can use it. */
+  /** Current zoom level for the indicator. */
+  const [zoomLevel, setZoomLevel] = useState(1)
+  /** Store current zoom behavior so reset/fit-to-view can use it. */
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null)
+  /** Store the simulation ref for external control (e.g., reheat on center-to-node). */
+  const simulationRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
 
   // Fetch graph data from API
   useEffect(() => {
@@ -139,7 +153,7 @@ export function KnowledgeGraph() {
     const tx = (width - bounds.width * scale) / 2 - bounds.x * scale
     const ty = (height - bounds.height * scale) / 2 - bounds.y * scale
 
-    svg.transition().duration(500).call(
+    svg.transition().duration(TRANSITION_MS).call(
       zoomRef.current.transform,
       d3.zoomIdentity.translate(tx, ty).scale(scale),
     )
@@ -149,11 +163,73 @@ export function KnowledgeGraph() {
   const resetZoom = useCallback(() => {
     if (!svgRef.current || !zoomRef.current) return
     const svg = d3.select(svgRef.current)
-    svg.transition().duration(400).call(
+    svg.transition().duration(TRANSITION_MS).call(
       zoomRef.current.transform,
       d3.zoomIdentity,
     )
   }, [])
+
+  /** Programmatic zoom in centered on the current viewport. */
+  const zoomIn = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return
+    const svg = d3.select(svgRef.current)
+    svg.transition().duration(TRANSITION_MS).call(
+      zoomRef.current.scaleBy,
+      ZOOM_STEP,
+    )
+  }, [])
+
+  /** Programmatic zoom out centered on the current viewport. */
+  const zoomOut = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return
+    const svg = d3.select(svgRef.current)
+    svg.transition().duration(TRANSITION_MS).call(
+      zoomRef.current.scaleBy,
+      1 / ZOOM_STEP,
+    )
+  }, [])
+
+  // Keyboard shortcuts: +/= zoom in, - zoom out, 0 reset, f fit-to-view
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't capture when user is typing in an input
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) return
+
+      switch (e.key) {
+        case '+':
+        case '=':
+          e.preventDefault()
+          zoomIn()
+          break
+        case '-':
+        case '_':
+          e.preventDefault()
+          zoomOut()
+          break
+        case '0':
+          e.preventDefault()
+          resetZoom()
+          break
+        case 'f':
+        case 'F':
+          // Only if no modifiers (so Ctrl+F still works for browser find)
+          if (!e.ctrlKey && !e.metaKey) {
+            e.preventDefault()
+            fitToView()
+          }
+          break
+        case 'Escape':
+          setSelectedNode(null)
+          break
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [zoomIn, zoomOut, resetZoom, fitToView])
 
   // ============ D3 Rendering ============
   useEffect(() => {
@@ -200,19 +276,48 @@ export function KnowledgeGraph() {
         target: typeof e.target === 'string' ? e.target : (e.target as any).id,
       }))
 
-    // Zoom container
+    // --- Graph container (all graph elements inside, transformed by zoom) ---
     const g = svg.append('g').attr('class', 'graph-container')
 
+    // --- Zoom behavior with smooth transitions ---
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.1, 4])
+      .scaleExtent([ZOOM_MIN, ZOOM_MAX])
+      .filter((event) => {
+        // Allow scroll-wheel, touch, and programmatic events always.
+        // For mouse buttons: only allow left-button (for pan) if not on a node.
+        // D3 default filter handles most of this.
+        return !event.ctrlKey && !event.button
+      })
       .on('zoom', (event) => {
         g.attr('transform', event.transform)
+        setZoomLevel(event.transform.k)
       })
+
     svg.call(zoom)
+
+    // Double-click on SVG background: zoom in centered on click point.
+    // Shift + double-click: zoom out.
+    svg.on('dblclick.zoom', null) // remove d3-zoom's default double-click handler
+    svg.on('dblclick', (event: MouseEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      const [mx, my] = d3.pointer(event, svgRef.current!)
+      const factor = event.shiftKey ? (1 / ZOOM_STEP) : ZOOM_STEP
+
+      // Zoom centered on the click position
+      svg.transition().duration(TRANSITION_MS).call(
+        zoom.scaleBy,
+        factor,
+        [mx, my],
+      )
+    })
+
     zoomRef.current = zoom
 
-    // Arrow marker definition — refX will be set per-link dynamically
+    // --- Defs: arrow markers, glow filter ---
     const defs = svg.append('defs')
+
     defs.append('marker')
       .attr('id', 'arrowhead')
       .attr('viewBox', '0 -5 10 10')
@@ -225,7 +330,7 @@ export function KnowledgeGraph() {
       .attr('d', 'M0,-5L10,0L0,5')
       .attr('fill', '#4b5563')
 
-    // Add a glow filter for hover effect
+    // Glow filter for hover effect
     const filter = defs.append('filter')
       .attr('id', 'glow')
       .attr('x', '-50%').attr('y', '-50%')
@@ -258,6 +363,8 @@ export function KnowledgeGraph() {
       .force('x', d3.forceX(width / 2).strength(0.03))
       .force('y', d3.forceY(height / 2).strength(0.03))
 
+    simulationRef.current = simulation
+
     // --- Render edges ---
     const link = g.append('g').attr('class', 'edges')
       .selectAll('line')
@@ -280,18 +387,24 @@ export function KnowledgeGraph() {
       .attr('pointer-events', 'none')
 
     // --- Drag behavior ---
+    // Track drag state to distinguish click vs drag
+    let isDragging = false
+
     const dragBehavior = d3.drag<SVGGElement, SimNode>()
       .on('start', (event: d3.D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+        isDragging = false
         if (!event.active) simulation.alphaTarget(0.3).restart()
         d.fx = d.x
         d.fy = d.y
       })
       .on('drag', (event: d3.D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+        isDragging = true
         d.fx = event.x
         d.fy = event.y
       })
       .on('end', (event: d3.D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
         if (!event.active) simulation.alphaTarget(0)
+        // Release the node so it floats back into simulation
         d.fx = null
         d.fy = null
       })
@@ -301,8 +414,16 @@ export function KnowledgeGraph() {
       .selectAll<SVGGElement, SimNode>('g')
       .data(nodes)
       .join('g')
-      .style('cursor', 'pointer')
+      .style('cursor', 'grab')
       .call(dragBehavior)
+
+    // Change cursor on drag
+    node.on('mousedown.cursor', function () {
+      d3.select(this).style('cursor', 'grabbing')
+    })
+    node.on('mouseup.cursor', function () {
+      d3.select(this).style('cursor', 'grab')
+    })
 
     // Node circles — radius scales with degree
     node.append('circle')
@@ -315,6 +436,7 @@ export function KnowledgeGraph() {
     // Degree badge for highly-connected nodes (degree >= 3)
     node.filter(d => d.degree >= 3)
       .append('text')
+      .attr('class', 'degree-badge')
       .text(d => String(d.degree))
       .attr('text-anchor', 'middle')
       .attr('dy', '0.35em')
@@ -325,6 +447,7 @@ export function KnowledgeGraph() {
 
     // Node labels below the circle
     node.append('text')
+      .attr('class', 'node-label')
       .text(d => d.label.length > 18 ? d.label.slice(0, 18) + '…' : d.label)
       .attr('text-anchor', 'middle')
       .attr('dy', d => d.radius + 14)
@@ -343,12 +466,36 @@ export function KnowledgeGraph() {
       adjacency.get(tgt)!.add(src)
     }
 
-    // Click to select
+    // --- Click to select (only if not dragging) ---
     node.on('click', (_event, d) => {
+      if (isDragging) return
       setSelectedNode(prev => prev?.id === d.id ? null : d)
     })
 
-    // Hover: enlarge hovered node, fade unconnected nodes
+    // --- Double-click on node: center and zoom to it ---
+    node.on('dblclick', (event, d) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      const w = svgRef.current!.clientWidth || 900
+      const h = svgRef.current!.clientHeight || 600
+      const targetScale = 2
+
+      // Center the node in the viewport
+      const tx = w / 2 - d.x! * targetScale
+      const ty = h / 2 - d.y! * targetScale
+
+      svg.transition().duration(TRANSITION_MS * 1.5)
+        .call(
+          zoom.transform,
+          d3.zoomIdentity.translate(tx, ty).scale(targetScale),
+        )
+
+      // Also select the node
+      setSelectedNode(d)
+    })
+
+    // --- Hover: enlarge hovered node, fade unconnected nodes ---
     node.on('mouseover', function (_event, d) {
       const neighbors = adjacency.get(d.id) || new Set<string>()
 
@@ -365,7 +512,11 @@ export function KnowledgeGraph() {
         .transition().duration(150)
         .attr('opacity', (n: any) => (n.id === d.id || neighbors.has(n.id)) ? 1 : 0.2)
 
-      node.select('text')
+      node.select('.node-label')
+        .transition().duration(150)
+        .attr('opacity', (n: any) => (n.id === d.id || neighbors.has(n.id)) ? 1 : 0.15)
+
+      node.select('.degree-badge')
         .transition().duration(150)
         .attr('opacity', (n: any) => (n.id === d.id || neighbors.has(n.id)) ? 1 : 0.15)
 
@@ -397,7 +548,11 @@ export function KnowledgeGraph() {
         .transition().duration(200)
         .attr('opacity', 0.9)
 
-      node.selectAll('text')
+      node.selectAll('.node-label')
+        .transition().duration(200)
+        .attr('opacity', 1)
+
+      node.selectAll('.degree-badge')
         .transition().duration(200)
         .attr('opacity', 1)
 
@@ -458,6 +613,7 @@ export function KnowledgeGraph() {
 
   const nodeCount = graphData?.nodes.length ?? 0
   const edgeCount = graphData?.edges.length ?? 0
+  const zoomPercent = Math.round(zoomLevel * 100)
 
   return (
     <div className="relative">
@@ -467,37 +623,74 @@ export function KnowledgeGraph() {
           <span>{nodeCount} nodes</span>
           <span>·</span>
           <span>{edgeCount} edges</span>
-          <button
-            onClick={fitToView}
-            className="ml-3 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-300 transition"
-            title="Fit graph to view"
-          >
-            ⛶ Fit
-          </button>
-          <button
-            onClick={resetZoom}
-            className="px-2.5 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-300 transition"
-            title="Reset zoom to 1:1"
-          >
-            ↺ Reset
-          </button>
         </div>
       </div>
 
       <div className="flex gap-4" ref={containerRef}>
         {/* Graph Canvas */}
-        <div className="flex-1 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+        <div className="flex-1 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden relative">
           <svg
             ref={svgRef}
             width="100%"
             height="600"
             className="w-full"
           />
+
+          {/* Zoom controls overlay (bottom-right) */}
+          <div className="absolute bottom-4 right-4 flex flex-col gap-1.5">
+            {/* Zoom percentage indicator */}
+            <div className="text-center text-xs text-gray-400 bg-gray-900/80 rounded px-2 py-0.5 backdrop-blur-sm select-none">
+              {zoomPercent}%
+            </div>
+
+            {/* Zoom in */}
+            <button
+              onClick={zoomIn}
+              className="w-8 h-8 bg-gray-700/90 hover:bg-gray-600 rounded flex items-center justify-center text-gray-300 text-lg transition backdrop-blur-sm"
+              title="Zoom in (+)"
+            >
+              +
+            </button>
+
+            {/* Zoom out */}
+            <button
+              onClick={zoomOut}
+              className="w-8 h-8 bg-gray-700/90 hover:bg-gray-600 rounded flex items-center justify-center text-gray-300 text-lg transition backdrop-blur-sm"
+              title="Zoom out (-)"
+            >
+              −
+            </button>
+
+            {/* Fit to view */}
+            <button
+              onClick={fitToView}
+              className="w-8 h-8 bg-gray-700/90 hover:bg-gray-600 rounded flex items-center justify-center text-gray-300 text-sm transition backdrop-blur-sm"
+              title="Fit to view (F)"
+            >
+              ⛶
+            </button>
+
+            {/* Reset zoom */}
+            <button
+              onClick={resetZoom}
+              className="w-8 h-8 bg-gray-700/90 hover:bg-gray-600 rounded flex items-center justify-center text-gray-300 text-sm transition backdrop-blur-sm"
+              title="Reset zoom (0)"
+            >
+              ↺
+            </button>
+          </div>
+
+          {/* Interaction hints (top-left, fades after 5s) */}
+          <div className="absolute top-3 left-3 text-[10px] text-gray-500 leading-relaxed pointer-events-none opacity-70 select-none">
+            <span>Scroll: zoom · Drag: pan · Drag node: move</span><br />
+            <span>Double-click: zoom in · Shift+dbl: zoom out</span><br />
+            <span>Double-click node: focus · Keys: +/−/0/F</span>
+          </div>
         </div>
 
         {/* Side Panel — selected node details */}
         {selectedNode && (
-          <div className="w-80 bg-gray-800 rounded-lg border border-gray-700 p-4 animate-in slide-in-from-right">
+          <div className="w-80 bg-gray-800 rounded-lg border border-gray-700 p-4 transition-all duration-300 ease-in-out">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-lg font-semibold text-blue-400">
                 {selectedNode.label}
@@ -505,7 +698,7 @@ export function KnowledgeGraph() {
               <button
                 onClick={() => setSelectedNode(null)}
                 className="text-gray-500 hover:text-gray-300 text-lg leading-none"
-                title="Close panel"
+                title="Close panel (Esc)"
               >
                 ×
               </button>
