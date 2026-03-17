@@ -164,29 +164,30 @@ export function KnowledgeGraph() {
       .attr('fill', '#6b7280')
       .attr('text-anchor', 'middle')
 
+    // Drag behavior
+    const dragBehavior = d3.drag<SVGGElement, SimNode>()
+      .on('start', (event: d3.D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+        if (!event.active) simulation.alphaTarget(0.3).restart()
+        d.fx = d.x
+        d.fy = d.y
+      })
+      .on('drag', (event: d3.D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+        d.fx = event.x
+        d.fy = event.y
+      })
+      .on('end', (event: d3.D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+        if (!event.active) simulation.alphaTarget(0)
+        d.fx = null
+        d.fy = null
+      })
+
     // Render nodes
     const node = g.append('g')
-      .selectAll('g')
+      .selectAll<SVGGElement, SimNode>('g')
       .data(nodes)
       .join('g')
       .style('cursor', 'pointer')
-      .call(
-        d3.drag<SVGGElement, SimNode>()
-          .on('start', (event, d) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart()
-            d.fx = d.x
-            d.fy = d.y
-          })
-          .on('drag', (event, d) => {
-            d.fx = event.x
-            d.fy = event.y
-          })
-          .on('end', (event, d) => {
-            if (!event.active) simulation.alphaTarget(0)
-            d.fx = null
-            d.fy = null
-          })
-      )
+      .call(dragBehavior)
 
     // Node circles
     node.append('circle')
