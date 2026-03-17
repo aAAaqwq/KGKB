@@ -611,93 +611,464 @@ def list_entries(
 
 @app.command()
 def link(
-    source_id: str = typer.Argument(..., help="Source knowledge ID"),
-    target_id: str = typer.Argument(..., help="Target knowledge ID"),
-    type: str = typer.Option("relates_to", "--type", "-t", help="Relationship type"),
-    weight: float = typer.Option(1.0, "--weight", "-w", help="Relationship weight"),
+    source_id: str = typer.Argument(..., help="Source knowledge ID (or prefix)"),
+    target_id: str = typer.Argument(..., help="Target knowledge ID (or prefix)"),
+    type: str = typer.Option("relates_to", "--type", "-t", help="Relationship type (e.g. relates_to, depends_on, contradicts)"),
+    weight: float = typer.Option(1.0, "--weight", "-w", help="Relationship weight (0.0–1.0)"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
 ):
-    """Create a relationship between two knowledge entries."""
-    conn = init_db()
-    cursor = conn.cursor()
+    """Create a relationship between two knowledge entries via the backend API.
 
-    # Verify both entries exist
-    cursor.execute("SELECT id FROM knowledge WHERE id LIKE ?", (f"{source_id}%",))
-    source = cursor.fetchone()
-    cursor.execute("SELECT id FROM knowledge WHERE id LIKE ?", (f"{target_id}%",))
-    target = cursor.fetchone()
+    Supports partial ID prefixes — the backend resolves them to full UUIDs.
+    Common relation types: relates_to, depends_on, extends, contradicts,
+    references, part_of, derived_from.
 
-    if not source:
-        console.print(f"❌ Source ID not found: {source_id}", style="red")
-        conn.close()
-        raise typer.Exit(1)
-    if not target:
-        console.print(f"❌ Target ID not found: {target_id}", style="red")
-        conn.close()
-        raise typer.Exit(1)
+    Examples:
+        kgkb link abc123 def456
+        kgkb link abc123 def456 --type depends_on
+        kgkb link abc123 def456 --type references --weight 0.8
+    """
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
 
-    # Use full IDs
-    source_id = source["id"]
-    target_id = target["id"]
+        payload = {
+            "source_id": source_id,
+            "target_id": target_id,
+            "type": type,
+            "weight": weight,
+        }
 
-    # Create relationship
-    rid = str(uuid4())
-    now = datetime.utcnow().isoformat()
+        try:
+            response = client.post("/api/relations", json=payload)
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
 
-    cursor.execute(
-        """
-        INSERT INTO relations (id, source_id, target_id, type, weight, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (rid, source_id, target_id, type, weight, now),
-    )
-    conn.commit()
-    conn.close()
+        handle_api_error(response, "create relation")
+        result = response.json()
 
-    console.print(f"✅ Created relationship: [cyan]{source_id[:8]}[/cyan] --[{type}]--> [cyan]{target_id[:8]}[/cyan]")
+    if output_json:
+        rprint(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    sid = result.get("source_id", source_id)[:8]
+    tid = result.get("target_id", target_id)[:8]
+    rtype = result.get("type", type)
+    console.print(f"\n✅ Created relation [bold cyan]{result['id'][:8]}...[/bold cyan]")
+    console.print(f"   🔗 [cyan]{sid}...[/cyan] --[{rtype}]--> [cyan]{tid}...[/cyan]")
+    console.print(f"   ⚖️  Weight: {result.get('weight', weight)}")
+    console.print()
+
+
+@app.command()
+def unlink(
+    source_id: str = typer.Argument(..., help="Source knowledge ID (or prefix)"),
+    target_id: str = typer.Argument(..., help="Target knowledge ID (or prefix)"),
+    type: Optional[str] = typer.Option(None, "--type", "-t", help="Only unlink relations of this type"),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt"),
+):
+    """Remove a relationship between two knowledge entries.
+
+    Finds and deletes relations where source matches source_id and target
+    matches target_id. If --type is given, only removes relations of that type.
+    By default asks for confirmation (use --force / -y to skip).
+
+    Examples:
+        kgkb unlink abc123 def456
+        kgkb unlink abc123 def456 --type depends_on
+        kgkb unlink abc123 def456 --force
+    """
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
+
+        # Find matching relations by querying the source node's relations
+        try:
+            response = client.get("/api/relations", params={"node_id": source_id, "limit": 200})
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+        handle_api_error(response, "list relations")
+        data = response.json()
+
+        # Filter: find relations matching source→target (prefix match on target)
+        matching = []
+        for r in data.get("items", []):
+            src_match = r["source_id"].startswith(source_id) or source_id.startswith(r["source_id"][:8])
+            tgt_match = r["target_id"].startswith(target_id) or target_id.startswith(r["target_id"][:8])
+            if src_match and tgt_match:
+                if type is None or r["type"] == type:
+                    matching.append(r)
+
+        if not matching:
+            console.print(
+                f"❌ No relations found from [cyan]{source_id[:8]}[/cyan] to [cyan]{target_id[:8]}[/cyan]"
+                + (f" with type '{type}'" if type else ""),
+                style="yellow",
+            )
+            raise typer.Exit(1)
+
+        # Show what will be removed
+        console.print(f"\n🔗 Found {len(matching)} relation(s) to remove:")
+        for r in matching:
+            console.print(
+                f"   {r['id'][:8]}... [cyan]{r['source_id'][:8]}[/cyan] "
+                f"--[{r['type']}]--> [cyan]{r['target_id'][:8]}[/cyan]"
+            )
+
+        # Confirm unless --force
+        if not force:
+            confirm = typer.confirm(f"\nDelete {len(matching)} relation(s)?", default=False)
+            if not confirm:
+                console.print("Cancelled.", style="dim")
+                raise typer.Exit(0)
+
+        # Delete each matching relation
+        deleted = 0
+        for r in matching:
+            try:
+                del_resp = client.delete(f"/api/relations/{r['id']}")
+                if del_resp.status_code < 400:
+                    deleted += 1
+                else:
+                    console.print(f"⚠️  Failed to delete {r['id'][:8]}: HTTP {del_resp.status_code}", style="yellow")
+            except httpx.RequestError as e:
+                console.print(f"⚠️  Failed to delete {r['id'][:8]}: {e}", style="yellow")
+
+        console.print(f"\n✅ Deleted {deleted}/{len(matching)} relation(s)", style="green")
+
+
+@app.command()
+def relations(
+    node_id: str = typer.Argument(..., help="Knowledge node ID (or prefix) to show relations for"),
+    type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by relation type"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output results as JSON"),
+):
+    """Show all relations for a knowledge entry.
+
+    Lists both incoming and outgoing relations for the specified node.
+    Shows relation type, direction, and the connected node's title.
+
+    Examples:
+        kgkb relations abc123
+        kgkb relations abc123 --type depends_on
+        kgkb relations abc123 --json
+    """
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
+
+        # Fetch relations for the node
+        try:
+            params = {"node_id": node_id, "limit": 200}
+            if type:
+                params["type"] = type
+            response = client.get("/api/relations", params=params)
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+        handle_api_error(response, "list relations")
+        data = response.json()
+
+        items = data.get("items", [])
+
+        if output_json:
+            rprint(json.dumps(data, indent=2, ensure_ascii=False))
+            return
+
+        if not items:
+            console.print(
+                f"📭 No relations found for node [cyan]{node_id[:8]}[/cyan]"
+                + (f" with type '{type}'" if type else ""),
+                style="yellow",
+            )
+            return
+
+        # Resolve node titles for better display (best-effort, cache per ID)
+        node_titles: dict = {}
+
+        def get_title(nid: str) -> str:
+            if nid not in node_titles:
+                try:
+                    resp = client.get(f"/api/knowledge/{nid}")
+                    if resp.status_code == 200:
+                        node_titles[nid] = resp.json().get("title", "")[:30]
+                    else:
+                        node_titles[nid] = ""
+                except Exception:
+                    node_titles[nid] = ""
+            return node_titles[nid]
+
+        # Separate into outgoing and incoming
+        outgoing = [r for r in items if r["source_id"].startswith(node_id) or node_id.startswith(r["source_id"][:8])]
+        incoming = [r for r in items if r not in outgoing]
+
+        table = Table(title=f"🔗 Relations for [cyan]{node_id[:8]}...[/cyan] ({len(items)} total)")
+        table.add_column("Dir", width=3, justify="center")
+        table.add_column("Relation ID", style="dim", width=10)
+        table.add_column("Type", style="magenta", width=14)
+        table.add_column("Connected Node", style="cyan", width=10)
+        table.add_column("Title", width=30)
+        table.add_column("Weight", style="green", width=7, justify="right")
+        table.add_column("Created", style="dim", width=12)
+
+        for r in outgoing:
+            connected = r["target_id"]
+            title_text = get_title(connected)
+            table.add_row(
+                "→",
+                r["id"][:8],
+                r["type"],
+                connected[:8],
+                title_text or "(untitled)",
+                f"{r['weight']:.1f}",
+                r["created_at"][:10],
+            )
+
+        for r in incoming:
+            connected = r["source_id"]
+            title_text = get_title(connected)
+            table.add_row(
+                "←",
+                r["id"][:8],
+                r["type"],
+                connected[:8],
+                title_text or "(untitled)",
+                f"{r['weight']:.1f}",
+                r["created_at"][:10],
+            )
+
+        console.print(table)
+        console.print(f"\n   → = outgoing ({len(outgoing)}),  ← = incoming ({len(incoming)})", style="dim")
+
+
+@app.command()
+def delete(
+    kid: str = typer.Argument(..., help="Knowledge ID (or prefix) to delete"),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
+):
+    """Delete a knowledge entry and all its relations.
+
+    Removes the entry from the database, deletes associated embeddings and
+    vector index entries, and removes any relations involving this node.
+    Asks for confirmation unless --force is used.
+
+    Examples:
+        kgkb delete abc12345
+        kgkb delete abc12345 --force
+    """
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
+
+        # First, fetch the entry to show details before deletion
+        try:
+            resp = client.get(f"/api/knowledge/{kid}")
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+
+        if resp.status_code == 404:
+            console.print(f"❌ Knowledge not found: {kid}", style="red")
+            raise typer.Exit(1)
+        handle_api_error(resp, "get knowledge")
+        entry = resp.json()
+
+        # Show what will be deleted
+        console.print(f"\n🗑️  About to delete:")
+        console.print(f"   🆔 ID:      [cyan]{entry['id'][:8]}...[/cyan]")
+        console.print(f"   📌 Title:   {entry.get('title', '(untitled)')}")
+        content_preview = entry.get("content", "")[:60].replace("\n", " ")
+        console.print(f"   📝 Content: {content_preview}...")
+        tags = entry.get("tags", [])
+        if tags:
+            console.print(f"   🏷️  Tags:    {', '.join(tags)}")
+
+        # Check for relations
+        try:
+            rel_resp = client.get("/api/relations", params={"node_id": entry["id"], "limit": 100})
+            if rel_resp.status_code == 200:
+                rel_data = rel_resp.json()
+                rel_count = rel_data.get("total", 0)
+                if rel_count > 0:
+                    console.print(f"   🔗 Relations: {rel_count} (will also be removed)", style="yellow")
+        except Exception:
+            pass
+
+        # Confirm deletion
+        if not force:
+            confirm = typer.confirm("\nAre you sure you want to delete this entry?", default=False)
+            if not confirm:
+                console.print("Cancelled.", style="dim")
+                raise typer.Exit(0)
+
+        # Perform deletion
+        try:
+            del_resp = client.delete(f"/api/knowledge/{entry['id']}")
+        except httpx.RequestError as e:
+            console.print(f"❌ API request failed: {e}", style="red")
+            raise typer.Exit(1)
+        handle_api_error(del_resp, "delete knowledge")
+        result = del_resp.json()
+
+    if output_json:
+        rprint(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    console.print(f"\n✅ Deleted knowledge [bold cyan]{entry['id'][:8]}...[/bold cyan]", style="green")
 
 
 @app.command()
 def export(
-    format: str = typer.Option("json", "--format", "-f", help="Export format (json, csv)"),
-    output: str = typer.Option(None, "--output", "-o", help="Output file path"),
+    format: str = typer.Option("json", "--format", "-f", help="Export format: json or md (markdown)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (prints to stdout if omitted)"),
 ):
-    """Export knowledge base data."""
-    conn = init_db()
-    cursor = conn.cursor()
+    """Export all knowledge base data via the backend API.
 
-    # Get all knowledge
-    cursor.execute("SELECT * FROM knowledge ORDER BY created_at DESC")
-    knowledge = [dict(row) for row in cursor.fetchall()]
+    Formats:
+      - json: Complete JSON export with knowledge entries, relations, and metadata.
+      - md:   Markdown document with each entry as a section, including tags and relations.
 
-    # Get all relations
-    cursor.execute("SELECT * FROM relations ORDER BY created_at DESC")
-    relations = [dict(row) for row in cursor.fetchall()]
+    Examples:
+        kgkb export                          # JSON to stdout
+        kgkb export --format json -o backup.json
+        kgkb export --format md -o knowledge.md
+    """
+    valid_formats = ("json", "md")
+    if format not in valid_formats:
+        console.print(f"❌ Invalid format '{format}'. Must be one of: {', '.join(valid_formats)}", style="red")
+        raise typer.Exit(1)
 
-    conn.close()
+    with api_client() as client:
+        if not check_api_available(client):
+            console.print(
+                f"❌ Backend API not reachable at {get_api_url()}\n"
+                "   Start the backend with: python -m uvicorn backend.app.main:app",
+                style="red",
+            )
+            raise typer.Exit(1)
 
-    # Parse JSON fields
-    for k in knowledge:
-        k["tags"] = json.loads(k["tags"]) if k["tags"] else []
+        # Fetch all knowledge entries (paginated, collect all)
+        all_entries = []
+        offset = 0
+        page_size = 100
+        while True:
+            try:
+                resp = client.get("/api/knowledge", params={"limit": page_size, "offset": offset})
+            except httpx.RequestError as e:
+                console.print(f"❌ API request failed: {e}", style="red")
+                raise typer.Exit(1)
+            handle_api_error(resp, "list knowledge")
+            page = resp.json()
+            items = page.get("items", [])
+            all_entries.extend(items)
+            if len(items) < page_size:
+                break
+            offset += page_size
 
-    data = {
-        "knowledge": knowledge,
-        "relations": relations,
-        "exported_at": datetime.utcnow().isoformat(),
-        "stats": {
-            "knowledge_count": len(knowledge),
-            "relation_count": len(relations),
-        },
-    }
+        # Fetch all relations
+        all_relations = []
+        try:
+            resp = client.get("/api/relations", params={"limit": 200})
+            if resp.status_code == 200:
+                all_relations = resp.json().get("items", [])
+        except Exception:
+            pass
+
+    now_str = datetime.utcnow().isoformat()
 
     if format == "json":
+        data = {
+            "knowledge": all_entries,
+            "relations": all_relations,
+            "exported_at": now_str,
+            "stats": {
+                "knowledge_count": len(all_entries),
+                "relation_count": len(all_relations),
+            },
+        }
         output_data = json.dumps(data, indent=2, ensure_ascii=False)
-        if output:
-            Path(output).write_text(output_data)
-            console.print(f"✅ Exported to {output}")
-        else:
-            rprint(output_data)
+
+    elif format == "md":
+        # Build a markdown document
+        lines = []
+        lines.append(f"# KGKB Knowledge Export")
+        lines.append(f"")
+        lines.append(f"Exported: {now_str}")
+        lines.append(f"Entries: {len(all_entries)} | Relations: {len(all_relations)}")
+        lines.append(f"")
+        lines.append(f"---")
+        lines.append(f"")
+
+        # Build a relation lookup for enriching entries
+        relations_by_node: dict = {}
+        for r in all_relations:
+            sid, tid = r["source_id"], r["target_id"]
+            relations_by_node.setdefault(sid, []).append(r)
+            relations_by_node.setdefault(tid, []).append(r)
+
+        for entry in all_entries:
+            eid = entry["id"]
+            title = entry.get("title", "(untitled)")
+            lines.append(f"## {title}")
+            lines.append(f"")
+            lines.append(f"- **ID**: `{eid[:8]}`")
+            lines.append(f"- **Type**: {entry.get('content_type', 'text')}")
+            tags = entry.get("tags", [])
+            if tags:
+                lines.append(f"- **Tags**: {', '.join(tags)}")
+            source = entry.get("source")
+            if source:
+                lines.append(f"- **Source**: {source}")
+            lines.append(f"- **Created**: {entry.get('created_at', '')[:10]}")
+            lines.append(f"")
+            lines.append(entry.get("content", ""))
+            lines.append(f"")
+
+            # Relations for this entry
+            node_rels = relations_by_node.get(eid, [])
+            if node_rels:
+                lines.append(f"### Relations")
+                lines.append(f"")
+                for r in node_rels:
+                    if r["source_id"] == eid:
+                        lines.append(f"- → **{r['type']}** → `{r['target_id'][:8]}`")
+                    else:
+                        lines.append(f"- ← **{r['type']}** ← `{r['source_id'][:8]}`")
+                lines.append(f"")
+
+            lines.append(f"---")
+            lines.append(f"")
+
+        output_data = "\n".join(lines)
+
+    if output:
+        Path(output).write_text(output_data, encoding="utf-8")
+        console.print(f"✅ Exported {len(all_entries)} entries to [bold]{output}[/bold]", style="green")
     else:
-        console.print(f"❌ Format '{format}' not supported yet", style="red")
+        rprint(output_data)
 
 
 @app.command()
@@ -714,32 +1085,134 @@ def web(
 
 
 @app.command()
-def config():
-    """Show current configuration."""
-    if not DEFAULT_CONFIG_PATH.exists():
-        console.print("⚠️ No config file found. Run 'kgkb init' first.", style="yellow")
+def config(
+    key: Optional[str] = typer.Argument(None, help="Config key to set (e.g. embedding.provider, embedding.endpoint)"),
+    value: Optional[str] = typer.Argument(None, help="Value to set for the key"),
+    output_json: bool = typer.Option(False, "--json", "-j", help="Output current config as JSON"),
+):
+    """Show or update KGKB configuration.
+
+    Without arguments: displays the current configuration in a table.
+    With key + value: updates a specific config key and saves.
+
+    Supported config keys:
+        embedding.provider   — ollama, openai, or custom
+        embedding.model      — embedding model name (e.g. qwen3-embedding:0.6b)
+        embedding.endpoint   — embedding service URL (e.g. http://localhost:11434)
+        embedding.dimension  — embedding dimension (e.g. 1024)
+        embedding.api_key    — API key for OpenAI/custom providers
+        database.path        — SQLite database path
+        api.url              — Backend API URL for CLI
+
+    Examples:
+        kgkb config                                  # Show all config
+        kgkb config embedding.provider ollama        # Set provider
+        kgkb config embedding.endpoint http://localhost:11434
+        kgkb config embedding.model qwen3-embedding:0.6b
+        kgkb config --json                           # Output as JSON
+    """
+    # Use JSON config as primary (what the backend uses)
+    config_path = DEFAULT_JSON_CONFIG_PATH
+    yaml_path = DEFAULT_CONFIG_PATH
+
+    # Load existing config
+    cfg: dict = {}
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            cfg = {}
+    elif yaml_path.exists():
+        try:
+            import yaml
+            with open(yaml_path) as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+
+    # If no key given, display current config
+    if key is None:
+        if not cfg:
+            console.print("⚠️  No config file found. Run 'kgkb init' first.", style="yellow")
+            return
+
+        if output_json:
+            rprint(json.dumps(cfg, indent=2, ensure_ascii=False))
+            return
+
+        console.print(Panel.fit("⚙️  KGKB Configuration", style="bold blue"))
+
+        table = Table(show_header=True)
+        table.add_column("Key", style="cyan", width=25)
+        table.add_column("Value", style="green")
+
+        def flatten(d: dict, prefix: str = "") -> None:
+            for k, v in sorted(d.items()):
+                full_key = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    flatten(v, full_key)
+                else:
+                    # Mask API keys for display
+                    display_val = str(v)
+                    if "key" in k.lower() and v and len(str(v)) > 8:
+                        display_val = str(v)[:4] + "****" + str(v)[-4:]
+                    table.add_row(full_key, display_val)
+
+        flatten(cfg)
+        console.print(table)
+
+        console.print(f"\n   📁 Config file: {config_path if config_path.exists() else yaml_path}", style="dim")
         return
 
-    import yaml
-    with open(DEFAULT_CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f)
-
-    console.print(Panel.fit("⚙️ KGKB Configuration", style="bold blue"))
-
-    table = Table(show_header=False)
-    table.add_column("Key", style="cyan")
-    table.add_column("Value", style="green")
-
-    def flatten(d, prefix=""):
-        for k, v in d.items():
-            key = f"{prefix}.{k}" if prefix else k
-            if isinstance(v, dict):
-                flatten(v, key)
+    # Setting a config value
+    if value is None:
+        # Show just this key's value
+        parts = key.split(".")
+        val = cfg
+        for p in parts:
+            if isinstance(val, dict) and p in val:
+                val = val[p]
             else:
-                table.add_row(key, str(v))
+                console.print(f"❌ Key not found: {key}", style="red")
+                raise typer.Exit(1)
+        console.print(f"[cyan]{key}[/cyan] = [green]{val}[/green]")
+        return
 
-    flatten(cfg)
-    console.print(table)
+    # Parse the value (try int, float, bool, else string)
+    parsed_value: object = value
+    if value.lower() in ("true", "false"):
+        parsed_value = value.lower() == "true"
+    else:
+        try:
+            parsed_value = int(value)
+        except ValueError:
+            try:
+                parsed_value = float(value)
+            except ValueError:
+                parsed_value = value
+
+    # Set the nested key
+    parts = key.split(".")
+    current = cfg
+    for i, p in enumerate(parts[:-1]):
+        if p not in current or not isinstance(current[p], dict):
+            current[p] = {}
+        current = current[p]
+    old_value = current.get(parts[-1])
+    current[parts[-1]] = parsed_value
+
+    # Save to JSON config
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    console.print(f"✅ Updated [cyan]{key}[/cyan]: ", end="")
+    if old_value is not None:
+        console.print(f"[dim]{old_value}[/dim] → [green]{parsed_value}[/green]")
+    else:
+        console.print(f"[green]{parsed_value}[/green] (new)")
+    console.print(f"   📁 Saved to {config_path}", style="dim")
 
 
 @app.command()
