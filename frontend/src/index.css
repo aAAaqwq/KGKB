@@ -2,24 +2,54 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ──────────────────────────────────────────────
+   Global base styles — dark theme foundation
+   ────────────────────────────────────────────── */
+
+:root {
+  --color-bg: #111827;
+  --color-surface: #1f2937;
+  --color-border: #374151;
+  --color-accent: #60a5fa;
+  --color-text: #f3f4f6;
+  --color-text-muted: #9ca3af;
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #111827;
-  color: #f3f4f6;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.6;
 }
 
 code {
   font-family: 'Fira Code', 'JetBrains Mono', monospace;
 }
 
+/* ── Selection highlight ── */
+::selection {
+  background-color: rgba(59, 130, 246, 0.35);
+  color: #fff;
+}
+
+/* ── Focus ring — consistent across all interactive elements ── */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Custom scrollbar — consistent dark theme ── */
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #1f2937;
+  background: var(--color-bg);
 }
 ::-webkit-scrollbar-thumb {
   background: #4b5563;
@@ -27,4 +57,67 @@ code {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #6b7280;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 var(--color-bg);
+}
+
+/* ── Smooth page-level transitions ── */
+#root {
+  min-height: 100vh;
+}
+
+/* ── Link base style (no underline by default) ── */
+a {
+  text-decoration: none;
+}
+
+/* ── Image responsiveness ── */
+img, svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ── Responsive typography scale ── */
+@media (max-width: 640px) {
+  html {
+    font-size: 15px;
+  }
+}
+
+/* ── Utility: hide scrollbar but still scrollable ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Utility: truncate multi-line ── */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Better touch targets on mobile ── */
+@media (pointer: coarse) {
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  input, select, textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
 }

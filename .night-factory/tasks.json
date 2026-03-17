@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 23,
+  "completed": 24,
   "tasks": [
     {
       "id": 1,
@@ -257,7 +257,7 @@
         "frontend/src/index.css",
         "frontend/tailwind.config.js"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 25,
