@@ -5,7 +5,7 @@ Main entry point for the KGKB REST API.
 """
 
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -327,20 +327,175 @@ async def list_tags():
 
 # ============ Search Endpoints ============
 
+class SearchResultResponse(BaseModel):
+    """A single search result with relevance score."""
+    id: str
+    title: str
+    content: str
+    tags: List[str]
+    source: Optional[str]
+    score: float
+    created_at: str
+
+
+class KnowledgeSearchResponse(BaseModel):
+    """Response model for /api/knowledge/search."""
+    results: List[SearchResultResponse]
+    total: int
+    query: str
+    mode: str
+
+
 class SearchResponse(BaseModel):
-    """Search response model."""
+    """Legacy search response model (for /api/search)."""
     results: List[dict]
     total: int
     query: str
 
 
+@app.get("/api/knowledge/search", response_model=KnowledgeSearchResponse)
+async def search_knowledge_advanced(
+    q: str = Query(..., min_length=1, description="Search query text"),
+    mode: str = Query("text", regex="^(text|semantic|hybrid)$", description="Search mode: text, semantic, or hybrid"),
+    limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
+    min_score: float = Query(0.0, ge=0.0, le=1.0, description="Minimum relevance score (0-1) for filtering results"),
+):
+    """Search knowledge entries with text, semantic, or hybrid mode.
+
+    Modes:
+    - **text**: Full-text search using SQLite FTS5 (with LIKE fallback).
+      Fast, exact keyword matching. Results scored by rank position.
+    - **semantic**: Vector similarity search using FAISS.
+      Requires embedding service. Finds conceptually similar content
+      even when exact keywords don't match.
+    - **hybrid**: Combines text and semantic results. Runs both searches,
+      normalizes scores to [0, 1], and merges with weighted combination
+      (0.4 text + 0.6 semantic). Deduplicates by knowledge ID.
+
+    Returns results sorted by descending relevance score.
+    Falls back to text search if semantic service is unavailable.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    results_map: Dict[str, SearchResultResponse] = {}  # keyed by knowledge ID
+
+    # --- Text search ---
+    if mode in ("text", "hybrid"):
+        text_entries = knowledge_service.search(q, limit=limit)
+        for rank, entry in enumerate(text_entries):
+            # Score by rank: top result = 1.0, decays linearly
+            text_score = max(0.0, 1.0 - (rank / max(len(text_entries), 1)))
+            results_map[entry.id] = SearchResultResponse(
+                id=entry.id,
+                title=entry.title,
+                content=entry.content,
+                tags=entry.tags,
+                source=entry.source,
+                score=text_score if mode == "text" else text_score * 0.4,
+                created_at=entry.created_at.isoformat(),
+            )
+
+    # --- Semantic search ---
+    if mode in ("semantic", "hybrid") and vector_manager and embedding_service:
+        try:
+            semantic_results = await vector_manager.search_knowledge(q, k=limit)
+
+            if semantic_results:
+                # Normalize semantic scores to [0, 1]
+                max_sem_score = max(r.score for r in semantic_results) if semantic_results else 1.0
+                min_sem_score = min(r.score for r in semantic_results) if len(semantic_results) > 1 else 0.0
+                score_range = max_sem_score - min_sem_score if max_sem_score != min_sem_score else 1.0
+
+                for r in semantic_results:
+                    normalized_score = (r.score - min_sem_score) / score_range if score_range > 0 else r.score
+
+                    if mode == "semantic":
+                        # Pure semantic mode: use normalized score directly
+                        # Fetch full knowledge entry for complete metadata
+                        full_entry = knowledge_service.get(r.id)
+                        if full_entry:
+                            results_map[r.id] = SearchResultResponse(
+                                id=r.id,
+                                title=full_entry.title,
+                                content=full_entry.content,
+                                tags=full_entry.tags,
+                                source=full_entry.source,
+                                score=round(normalized_score, 4),
+                                created_at=full_entry.created_at.isoformat(),
+                            )
+                    else:
+                        # Hybrid mode: combine with text score
+                        semantic_weighted = normalized_score * 0.6
+                        if r.id in results_map:
+                            # Already found by text search — add semantic weight
+                            existing = results_map[r.id]
+                            combined = existing.score + semantic_weighted
+                            results_map[r.id] = existing.model_copy(update={"score": round(combined, 4)})
+                        else:
+                            # Only found by semantic search — use semantic score only
+                            full_entry = knowledge_service.get(r.id)
+                            if full_entry:
+                                results_map[r.id] = SearchResultResponse(
+                                    id=r.id,
+                                    title=full_entry.title,
+                                    content=full_entry.content,
+                                    tags=full_entry.tags,
+                                    source=full_entry.source,
+                                    score=round(semantic_weighted, 4),
+                                    created_at=full_entry.created_at.isoformat(),
+                                )
+        except Exception as e:
+            print(f"Semantic search failed, falling back to text results: {e}")
+            # If pure semantic mode failed and we have no results, try text fallback
+            if mode == "semantic" and not results_map:
+                text_entries = knowledge_service.search(q, limit=limit)
+                for rank, entry in enumerate(text_entries):
+                    text_score = max(0.0, 1.0 - (rank / max(len(text_entries), 1)))
+                    results_map[entry.id] = SearchResultResponse(
+                        id=entry.id,
+                        title=entry.title,
+                        content=entry.content,
+                        tags=entry.tags,
+                        source=entry.source,
+                        score=text_score,
+                        created_at=entry.created_at.isoformat(),
+                    )
+
+    # If semantic mode requested but no embedding service, fall back to text
+    if mode == "semantic" and not results_map and (not vector_manager or not embedding_service):
+        text_entries = knowledge_service.search(q, limit=limit)
+        for rank, entry in enumerate(text_entries):
+            text_score = max(0.0, 1.0 - (rank / max(len(text_entries), 1)))
+            results_map[entry.id] = SearchResultResponse(
+                id=entry.id,
+                title=entry.title,
+                content=entry.content,
+                tags=entry.tags,
+                source=entry.source,
+                score=text_score,
+                created_at=entry.created_at.isoformat(),
+            )
+
+    # Sort by score descending, apply min_score filter, limit
+    sorted_results = sorted(results_map.values(), key=lambda r: r.score, reverse=True)
+    filtered_results = [r for r in sorted_results if r.score >= min_score][:limit]
+
+    return KnowledgeSearchResponse(
+        results=filtered_results,
+        total=len(filtered_results),
+        query=q,
+        mode=mode,
+    )
+
+
 @app.get("/api/search", response_model=SearchResponse)
-async def search_knowledge(
+async def search_knowledge_legacy(
     q: str = Query(..., min_length=1),
     limit: int = Query(10, le=50),
     semantic: bool = Query(False),
 ):
-    """Search knowledge entries."""
+    """Legacy search endpoint (use /api/knowledge/search for full features)."""
     if semantic and vector_manager:
         # Semantic search
         try:
@@ -355,6 +510,8 @@ async def search_knowledge(
             # Fall back to keyword search
 
     # Keyword search
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
     results = knowledge_service.search(q, limit=limit)
     return SearchResponse(
         results=[{"id": r.id, "content": r.content, "tags": r.tags} for r in results],
