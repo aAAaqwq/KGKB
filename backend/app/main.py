@@ -92,6 +92,34 @@ app.add_middleware(
 )
 
 
+# ============ Response Models ============
+
+class KnowledgeResponse(BaseModel):
+    """Response model for knowledge."""
+    id: str
+    title: str
+    content: str
+    content_type: str
+    tags: List[str]
+    source: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+class PaginatedKnowledgeResponse(BaseModel):
+    """Paginated list response for knowledge entries."""
+    items: List[KnowledgeResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class DeleteResponse(BaseModel):
+    """Standard response for delete operations."""
+    status: str
+    id: str
+
+
 # ============ Helpers ============
 
 def _knowledge_to_response(k) -> KnowledgeResponse:
@@ -108,32 +136,29 @@ def _knowledge_to_response(k) -> KnowledgeResponse:
     )
 
 
-# ============ Knowledge Endpoints ============
-
-class KnowledgeResponse(BaseModel):
-    """Response model for knowledge."""
-    id: str
-    title: str
-    content: str
-    content_type: str
-    tags: List[str]
-    source: Optional[str]
-    created_at: str
-    updated_at: str
-
-
-@app.post("/api/knowledge", response_model=KnowledgeResponse)
+@app.post("/api/knowledge", response_model=KnowledgeResponse, status_code=201)
 async def create_knowledge(data: KnowledgeCreate):
-    """Create a new knowledge entry."""
-    knowledge = knowledge_service.create(
-        content=data.content,
-        title=data.title,
-        content_type=data.content_type,
-        tags=data.tags,
-        source=data.source,
-    )
+    """Create a new knowledge entry.
 
-    # Generate embedding asynchronously
+    Accepts title, content, content_type, tags, and source.
+    Auto-generates a title from content if not provided.
+    Triggers embedding generation if embedding service is available.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        knowledge = knowledge_service.create(
+            content=data.content,
+            title=data.title,
+            content_type=data.content_type,
+            tags=data.tags,
+            source=data.source,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create knowledge: {e}")
+
+    # Generate embedding asynchronously (best-effort, don't fail the request)
     if vector_manager:
         try:
             await vector_manager.index_knowledge(
@@ -142,55 +167,118 @@ async def create_knowledge(data: KnowledgeCreate):
                 metadata={"tags": knowledge.tags, "source": knowledge.source},
             )
         except Exception as e:
-            print(f"Warning: Failed to index knowledge: {e}")
+            print(f"Warning: Failed to index knowledge {knowledge.id}: {e}")
 
     return _knowledge_to_response(knowledge)
 
 
 @app.get("/api/knowledge/{kid}", response_model=KnowledgeResponse)
 async def get_knowledge(kid: str):
-    """Get a knowledge entry by ID."""
+    """Get a knowledge entry by ID.
+
+    Supports both full UUIDs and partial ID prefix matching.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
     knowledge = knowledge_service.get(kid)
     if not knowledge:
-        raise HTTPException(status_code=404, detail="Knowledge not found")
+        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
 
     return _knowledge_to_response(knowledge)
 
 
-@app.get("/api/knowledge", response_model=List[KnowledgeResponse])
+@app.get("/api/knowledge", response_model=PaginatedKnowledgeResponse)
 async def list_knowledge(
-    tag: Optional[str] = Query(None),
-    limit: int = Query(20, le=100),
-    offset: int = Query(0),
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+    content_type: Optional[str] = Query(None, description="Filter by content type"),
+    limit: int = Query(20, ge=1, le=100, description="Max items per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
 ):
-    """List knowledge entries."""
-    entries = knowledge_service.list(tag=tag, limit=limit, offset=offset)
-    return [_knowledge_to_response(k) for k in entries]
+    """List knowledge entries with pagination, tag filter, and content type filter."""
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    entries = knowledge_service.list(
+        tag=tag, content_type=content_type, limit=limit, offset=offset
+    )
+    total = knowledge_service.count(tag=tag)
+
+    return PaginatedKnowledgeResponse(
+        items=[_knowledge_to_response(k) for k in entries],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.put("/api/knowledge/{kid}", response_model=KnowledgeResponse)
 async def update_knowledge(kid: str, data: KnowledgeUpdate):
-    """Update a knowledge entry."""
-    knowledge = knowledge_service.update(
-        kid,
-        title=data.title,
-        content=data.content,
-        content_type=data.content_type,
-        tags=data.tags,
-        source=data.source,
-    )
+    """Update a knowledge entry.
+
+    Only provided (non-None) fields are updated; omitted fields keep their current values.
+    Re-indexes the embedding if content changes.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        knowledge = knowledge_service.update(
+            kid,
+            title=data.title,
+            content=data.content,
+            content_type=data.content_type,
+            tags=data.tags,
+            source=data.source,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update knowledge: {e}")
+
     if not knowledge:
-        raise HTTPException(status_code=404, detail="Knowledge not found")
+        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
+
+    # Re-index embedding if content changed
+    if data.content is not None and vector_manager:
+        try:
+            await vector_manager.index_knowledge(
+                id=knowledge.id,
+                content=knowledge.content,
+                metadata={"tags": knowledge.tags, "source": knowledge.source},
+            )
+        except Exception as e:
+            print(f"Warning: Failed to re-index knowledge {knowledge.id}: {e}")
 
     return _knowledge_to_response(knowledge)
 
 
-@app.delete("/api/knowledge/{kid}")
+@app.delete("/api/knowledge/{kid}", response_model=DeleteResponse)
 async def delete_knowledge(kid: str):
-    """Delete a knowledge entry."""
+    """Delete a knowledge entry and its relations/embeddings.
+
+    Also removes the vector from the FAISS index if present.
+    """
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
     if not knowledge_service.delete(kid):
-        raise HTTPException(status_code=404, detail="Knowledge not found")
-    return {"status": "deleted"}
+        raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
+
+    # Remove from vector store (best-effort)
+    if vector_manager:
+        try:
+            vector_manager.store.delete_vector(kid)
+        except Exception as e:
+            print(f"Warning: Failed to remove vector for {kid}: {e}")
+
+    return DeleteResponse(status="deleted", id=kid)
+
+
+@app.get("/api/tags", response_model=List[str])
+async def list_tags():
+    """Get all unique tags across all knowledge entries."""
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return knowledge_service.get_all_tags()
 
 
 # ============ Search Endpoints ============
@@ -283,8 +371,17 @@ async def create_relation(data: RelationCreate):
 
 
 @app.get("/api/relations")
-async def list_relations(limit: int = Query(50)):
-    """List all relationships."""
+async def list_relations(
+    node_id: Optional[str] = Query(None, description="Filter relations by node ID"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """List relationships, optionally filtered by node ID."""
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    if node_id:
+        relations = knowledge_service.get_relations_for_node(node_id)
+        return relations[:limit]
     return knowledge_service.list_relations(limit=limit)
 
 
