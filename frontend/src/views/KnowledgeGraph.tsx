@@ -21,6 +21,7 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
 import { api, GraphData, GraphNode, GraphEdge } from '../api/client'
 import { NodeDetailPanel, NodeInfo } from '../components/NodeDetailPanel'
+import { GraphFilters, TagCount } from '../components/GraphFilters'
 
 /** Simulation node with degree (connection count) for sizing. */
 interface SimNode extends d3.SimulationNodeDatum {
@@ -94,6 +95,10 @@ export function KnowledgeGraph() {
   const [error, setError] = useState<string | null>(null)
   /** Current zoom level for the indicator. */
   const [zoomLevel, setZoomLevel] = useState(1)
+  /** Tag filter: empty set = show all, non-empty = only show nodes with these tags. */
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set())
+  /** Search-in-graph query for highlighting matching nodes. */
+  const [graphSearchQuery, setGraphSearchQuery] = useState('')
   /** Store current zoom behavior so reset/fit-to-view can use it. */
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null)
   /** Store the simulation ref for external control (e.g., reheat on center-to-node). */
@@ -111,6 +116,92 @@ export function KnowledgeGraph() {
     }
     return map
   }, [graphData])
+
+  /** Compute unique tags with counts from graph data. */
+  const tagCounts: TagCount[] = useMemo(() => {
+    if (!graphData) return []
+    const counts = new Map<string, number>()
+    for (const node of graphData.nodes) {
+      for (const tag of node.tags) {
+        counts.set(tag, (counts.get(tag) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries()).map(([tag, count]) => ({ tag, count }))
+  }, [graphData])
+
+  /** All unique tags for the "select all" operation. */
+  const allTags = useMemo(() => new Set(tagCounts.map(tc => tc.tag)), [tagCounts])
+
+  /** Set of node IDs that pass the tag filter. Empty activeTags = all pass. */
+  const filteredNodeIds = useMemo(() => {
+    if (!graphData) return new Set<string>()
+    if (activeTags.size === 0) {
+      return new Set(graphData.nodes.map(n => n.id))
+    }
+    return new Set(
+      graphData.nodes
+        .filter(n => n.tags.some(t => activeTags.has(t)))
+        .map(n => n.id)
+    )
+  }, [graphData, activeTags])
+
+  /** Set of node IDs matching the search query. */
+  const searchMatchIds = useMemo(() => {
+    if (!graphData || !graphSearchQuery.trim()) return new Set<string>()
+    const q = graphSearchQuery.toLowerCase().trim()
+    return new Set(
+      graphData.nodes
+        .filter(n =>
+          n.label.toLowerCase().includes(q) ||
+          n.content.toLowerCase().includes(q) ||
+          n.tags.some(t => t.toLowerCase().includes(q))
+        )
+        .map(n => n.id)
+    )
+  }, [graphData, graphSearchQuery])
+
+  /** Visible edge count after tag filter. */
+  const visibleEdgeCount = useMemo(() => {
+    if (!graphData) return 0
+    if (activeTags.size === 0) return graphData.edges.length
+    return graphData.edges.filter(e => {
+      const src = typeof e.source === 'string' ? e.source : (e.source as any).id
+      const tgt = typeof e.target === 'string' ? e.target : (e.target as any).id
+      return filteredNodeIds.has(src) && filteredNodeIds.has(tgt)
+    }).length
+  }, [graphData, activeTags, filteredNodeIds])
+
+  /** Tag filter callbacks. */
+  const handleToggleTag = useCallback((tag: string) => {
+    setActiveTags(prev => {
+      const next = new Set(prev)
+      // If currently showing all (empty set), switch to showing only this tag
+      if (prev.size === 0) {
+        // Start filtering: show only this tag
+        return new Set([tag])
+      }
+      if (next.has(tag)) {
+        next.delete(tag)
+        // If removing the last filter, go back to "show all"
+        if (next.size === 0) return new Set<string>()
+      } else {
+        next.add(tag)
+        // If all tags selected, clear filter (= show all)
+        if (next.size === allTags.size) return new Set<string>()
+      }
+      return next
+    })
+  }, [allTags])
+
+  const handleSelectAll = useCallback(() => {
+    setActiveTags(new Set<string>())
+  }, [])
+
+  const handleSelectNone = useCallback(() => {
+    // Set to a special "none" state — use a placeholder impossible tag
+    // Actually, set activeTags to contain a dummy so filteredNodeIds is empty
+    setActiveTags(new Set(['__none__']))
+  }, [])
 
   /**
    * Navigate to a specific node in the graph: center + zoom on it, and select it.
@@ -642,6 +733,66 @@ export function KnowledgeGraph() {
     return () => { simulation.stop() }
   }, [graphData, fitToView])
 
+  // ============ Filter + Search highlight (applied without re-rendering D3) ============
+  useEffect(() => {
+    if (!svgRef.current || !graphData) return
+    const svg = d3.select(svgRef.current)
+    const isFiltering = activeTags.size > 0
+    const isSearching = graphSearchQuery.trim().length > 0
+
+    // Apply tag filter: fade non-matching nodes and edges
+    svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+      .transition().duration(250)
+      .attr('opacity', d => {
+        if (!isFiltering) return 1
+        return filteredNodeIds.has(d.id) ? 1 : 0.1
+      })
+
+    svg.selectAll<SVGLineElement, SimLink>('g.edges > line')
+      .transition().duration(250)
+      .attr('stroke-opacity', d => {
+        if (!isFiltering) return 0.6
+        const src = typeof d.source === 'string' ? d.source : (d.source as SimNode).id
+        const tgt = typeof d.target === 'string' ? d.target : (d.target as SimNode).id
+        return (filteredNodeIds.has(src) && filteredNodeIds.has(tgt)) ? 0.6 : 0.04
+      })
+
+    svg.selectAll<SVGTextElement, SimLink>('g.edge-labels > text')
+      .transition().duration(250)
+      .attr('opacity', d => {
+        if (!isFiltering) return 1
+        const src = typeof d.source === 'string' ? d.source : (d.source as SimNode).id
+        const tgt = typeof d.target === 'string' ? d.target : (d.target as SimNode).id
+        return (filteredNodeIds.has(src) && filteredNodeIds.has(tgt)) ? 1 : 0.04
+      })
+
+    // Apply search highlight: add glow ring around matching nodes
+    svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+      .select('circle')
+      .transition().duration(200)
+      .attr('stroke', d => {
+        if (isSearching && searchMatchIds.has(d.id)) return '#fbbf24' // yellow highlight
+        return '#1f2937'
+      })
+      .attr('stroke-width', d => {
+        if (isSearching && searchMatchIds.has(d.id)) return 3.5
+        return 2
+      })
+
+    // Also brighten the label of search matches
+    svg.selectAll<SVGGElement, SimNode>('g.nodes > g')
+      .select('.node-label')
+      .transition().duration(200)
+      .attr('fill', d => {
+        if (isSearching && searchMatchIds.has(d.id)) return '#fbbf24'
+        return '#d1d5db'
+      })
+      .attr('font-weight', d => {
+        if (isSearching && searchMatchIds.has(d.id)) return 'bold'
+        return 'normal'
+      })
+  }, [activeTags, graphSearchQuery, filteredNodeIds, searchMatchIds, graphData])
+
   // ============ Render ============
 
   if (loading) {
@@ -660,12 +811,25 @@ export function KnowledgeGraph() {
     <div className="relative">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">🕸️ Knowledge Graph</h1>
-        <div className="flex items-center gap-3 text-sm text-gray-400">
-          <span>{nodeCount} nodes</span>
-          <span>·</span>
-          <span>{edgeCount} edges</span>
-        </div>
       </div>
+
+      {/* Tag filters + search-in-graph */}
+      {graphData && tagCounts.length > 0 && (
+        <GraphFilters
+          tagCounts={tagCounts}
+          activeTags={activeTags}
+          onToggleTag={handleToggleTag}
+          onSelectAll={handleSelectAll}
+          onSelectNone={handleSelectNone}
+          searchQuery={graphSearchQuery}
+          onSearchChange={setGraphSearchQuery}
+          visibleNodeCount={filteredNodeIds.size}
+          totalNodeCount={nodeCount}
+          visibleEdgeCount={visibleEdgeCount}
+          totalEdgeCount={edgeCount}
+          searchMatchCount={searchMatchIds.size}
+        />
+      )}
 
       <div className="flex gap-4" ref={containerRef}>
         {/* Graph Canvas */}
@@ -747,21 +911,36 @@ export function KnowledgeGraph() {
         )}
       </div>
 
-      {/* Legend — tag color mapping */}
+      {/* Legend — dynamic tag colors from actual graph data + size hint */}
       <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-400">
-        {Object.entries(TAG_COLORS).filter(([k]) => k !== 'default').map(([tag, color]) => (
-          <span key={tag} className="flex items-center gap-1">
-            <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: color }} />
-            {tag}
-          </span>
-        ))}
+        {tagCounts.length > 0 ? (
+          tagCounts
+            .sort((a, b) => b.count - a.count)
+            .map(({ tag }) => (
+              <span key={tag} className="flex items-center gap-1">
+                <span
+                  className="w-3 h-3 rounded-full inline-block"
+                  style={{ backgroundColor: getNodeColor([tag]) }}
+                />
+                {tag}
+              </span>
+            ))
+        ) : (
+          // Fallback: show default palette when no data
+          Object.entries(TAG_COLORS).filter(([k]) => k !== 'default').map(([tag, color]) => (
+            <span key={tag} className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: color }} />
+              {tag}
+            </span>
+          ))
+        )}
         <span className="flex items-center gap-1 ml-4 text-gray-500">
           <span className="w-3 h-3 rounded-full inline-block border border-gray-500" />
-          = small node (few connections)
+          = few connections
         </span>
         <span className="flex items-center gap-1 text-gray-500">
           <span className="w-5 h-5 rounded-full inline-block border border-gray-500" />
-          = large node (hub)
+          = hub node
         </span>
       </div>
 
