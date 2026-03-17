@@ -766,7 +766,7 @@ class KnowledgeService:
     # ============ Stats ============
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get database statistics."""
+        """Get database statistics including tag distribution."""
         conn = self._get_conn()
 
         knowledge_count = conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
@@ -779,10 +779,19 @@ class KnowledgeService:
 
         schema_version = self._get_schema_version(conn)
 
+        # Compute tag distribution
+        tag_counts: Dict[str, int] = {}
+        cursor = conn.execute("SELECT tags FROM knowledge")
+        for row in cursor.fetchall():
+            tags = json.loads(row["tags"]) if row["tags"] else []
+            for tag in tags:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
         return {
             "knowledge_count": knowledge_count,
             "relation_count": relation_count,
             "embedding_count": embedding_count,
+            "tag_counts": tag_counts,
             "schema_version": schema_version,
             "db_path": str(self.db_path),
         }

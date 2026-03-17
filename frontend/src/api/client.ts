@@ -23,6 +23,23 @@ const http: AxiosInstance = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+// Response interceptor: log errors in dev mode
+http.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (import.meta.env.DEV) {
+      const url = error.config?.url || 'unknown'
+      const status = error.response?.status
+      if (status) {
+        console.warn(`[KGKB API] ${error.config?.method?.toUpperCase()} ${url} → ${status}`)
+      } else {
+        console.warn(`[KGKB API] ${error.config?.method?.toUpperCase()} ${url} → Network error`)
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
 // ============ Types — Knowledge ============
 
 /** A full knowledge entry returned by the backend. */
@@ -142,13 +159,20 @@ export interface GraphData {
 
 // ============ Types — Stats & Health ============
 
-/** Health check response. */
+/** Health check response (matches backend's nested structure). */
 export interface HealthResponse {
   status: string
   version: string
-  vector_count: number
-  knowledge_count: number
-  embedding_available: boolean
+  uptime_seconds: number
+  services: {
+    database: boolean
+    embedding: boolean
+    vector_store: boolean
+  }
+  counts: {
+    knowledge: number
+    vectors: number
+  }
 }
 
 /** Database stats response. */

@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 19,
+  "completed": 21,
   "tasks": [
     {
       "id": 1,
@@ -211,7 +211,7 @@
         "backend/run.py",
         "backend/app/main.py"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 21,
@@ -222,7 +222,7 @@
         "frontend/vite.config.ts",
         "frontend/src/api/client.ts"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 22,

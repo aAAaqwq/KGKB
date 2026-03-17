@@ -4,6 +4,7 @@ KGKB Backend - FastAPI Application
 Main entry point for the KGKB REST API.
 """
 
+import os
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -99,13 +100,31 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS for frontend
+# CORS configuration
+# Default: allow common frontend dev ports + configurable via KGKB_CORS_ORIGINS env var
+_default_origins = [
+    "http://localhost:3000",    # Vite dev server (configured port)
+    "http://localhost:5173",    # Vite default port
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",    # Alternative dev port
+    "http://127.0.0.1:8080",
+]
+_env_origins = os.environ.get("KGKB_CORS_ORIGINS", "")
+if _env_origins == "*":
+    _allowed_origins = ["*"]
+elif _env_origins:
+    _allowed_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+else:
+    _allowed_origins = _default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: Configure for production
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 
 
@@ -356,7 +375,7 @@ class SearchResponse(BaseModel):
 @app.get("/api/knowledge/search", response_model=KnowledgeSearchResponse)
 async def search_knowledge_advanced(
     q: str = Query(..., min_length=1, description="Search query text"),
-    mode: str = Query("text", regex="^(text|semantic|hybrid)$", description="Search mode: text, semantic, or hybrid"),
+    mode: str = Query("text", pattern="^(text|semantic|hybrid)$", description="Search mode: text, semantic, or hybrid"),
     limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
     min_score: float = Query(0.0, ge=0.0, le=1.0, description="Minimum relevance score (0-1) for filtering results"),
 ):
@@ -699,19 +718,41 @@ async def delete_relation(rid: str):
 
 # ============ Health Check ============
 
+import time as _time
+
+_startup_time: float = _time.time()
+
+
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint.
+
+    Returns service status including database connectivity, embedding
+    service availability, vector store count, and uptime.
+    Used by monitoring, load balancers, and frontend connection checks.
+    """
     embedding_available = False
     if embedding_service:
-        embedding_available = await embedding_service.is_available()
+        try:
+            embedding_available = await embedding_service.is_available()
+        except Exception:
+            embedding_available = False
+
+    uptime_seconds = round(_time.time() - _startup_time, 1) if _startup_time > 0 else 0
 
     return {
         "status": "healthy",
         "version": "0.1.0",
-        "vector_count": vector_manager.store.count() if vector_manager else 0,
-        "knowledge_count": knowledge_service.count() if knowledge_service else 0,
-        "embedding_available": embedding_available,
+        "uptime_seconds": uptime_seconds,
+        "services": {
+            "database": knowledge_service is not None,
+            "embedding": embedding_available,
+            "vector_store": vector_manager is not None and vector_manager.store is not None,
+        },
+        "counts": {
+            "knowledge": knowledge_service.count() if knowledge_service else 0,
+            "vectors": vector_manager.store.count() if vector_manager else 0,
+        },
     }
 
 
