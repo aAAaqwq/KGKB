@@ -1,1 +1,17 @@
 /* App-level styles (minimal — mostly using Tailwind) */
+
+/* Slide-in animation for side panels */
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.25s ease-out;
+}

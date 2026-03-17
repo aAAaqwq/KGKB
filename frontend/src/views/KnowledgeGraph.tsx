@@ -17,9 +17,10 @@
  * - Hover highlighting with connected-node emphasis
  */
 
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
 import { api, GraphData, GraphNode, GraphEdge } from '../api/client'
+import { NodeDetailPanel, NodeInfo } from '../components/NodeDetailPanel'
 
 /** Simulation node with degree (connection count) for sizing. */
 interface SimNode extends d3.SimulationNodeDatum {
@@ -97,6 +98,45 @@ export function KnowledgeGraph() {
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null)
   /** Store the simulation ref for external control (e.g., reheat on center-to-node). */
   const simulationRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
+  /** Store current SimNodes for external access (e.g., navigate-to-node). */
+  const nodesRef = useRef<SimNode[]>([])
+
+  /** Build a map of node ID → label for the detail panel to resolve relations. */
+  const nodeLabelMap = useMemo(() => {
+    const map = new Map<string, string>()
+    if (graphData) {
+      for (const n of graphData.nodes) {
+        map.set(n.id, n.label)
+      }
+    }
+    return map
+  }, [graphData])
+
+  /**
+   * Navigate to a specific node in the graph: center + zoom on it, and select it.
+   * Used when clicking a connected node in the detail panel.
+   */
+  const navigateToNode = useCallback((nodeId: string) => {
+    const targetNode = nodesRef.current.find(n => n.id === nodeId)
+    if (!targetNode || !svgRef.current || !zoomRef.current) return
+
+    const w = svgRef.current.clientWidth || 900
+    const h = svgRef.current.clientHeight || 600
+    const targetScale = 2
+
+    const tx = w / 2 - targetNode.x! * targetScale
+    const ty = h / 2 - targetNode.y! * targetScale
+
+    const svg = d3.select(svgRef.current)
+    svg.transition().duration(TRANSITION_MS * 1.5)
+      .call(
+        zoomRef.current!.transform,
+        d3.zoomIdentity.translate(tx, ty).scale(targetScale),
+      )
+
+    // Select the target node
+    setSelectedNode(targetNode)
+  }, [])
 
   // Fetch graph data from API
   useEffect(() => {
@@ -364,6 +404,7 @@ export function KnowledgeGraph() {
       .force('y', d3.forceY(height / 2).strength(0.03))
 
     simulationRef.current = simulation
+    nodesRef.current = nodes
 
     // --- Render edges ---
     const link = g.append('g').attr('class', 'edges')
@@ -688,39 +729,21 @@ export function KnowledgeGraph() {
           </div>
         </div>
 
-        {/* Side Panel — selected node details */}
+        {/* Side Panel — full node details with relations */}
         {selectedNode && (
-          <div className="w-80 bg-gray-800 rounded-lg border border-gray-700 p-4 transition-all duration-300 ease-in-out">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-semibold text-blue-400">
-                {selectedNode.label}
-              </h3>
-              <button
-                onClick={() => setSelectedNode(null)}
-                className="text-gray-500 hover:text-gray-300 text-lg leading-none"
-                title="Close panel (Esc)"
-              >
-                ×
-              </button>
-            </div>
-            <p className="text-gray-300 text-sm mb-3 whitespace-pre-wrap">{selectedNode.content}</p>
-            <div className="flex flex-wrap gap-1 mb-3">
-              {selectedNode.tags.map(tag => (
-                <span
-                  key={tag}
-                  className="px-2 py-0.5 text-xs rounded-full"
-                  style={{ backgroundColor: getNodeColor([tag]) + '33', color: getNodeColor([tag]) }}
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-            <div className="text-gray-500 text-xs space-y-0.5">
-              <p>ID: {selectedNode.id.slice(0, 8)}</p>
-              <p>Connections: {selectedNode.degree}</p>
-              <p>Created: {new Date(selectedNode.created_at).toLocaleDateString()}</p>
-            </div>
-          </div>
+          <NodeDetailPanel
+            node={{
+              id: selectedNode.id,
+              label: selectedNode.label,
+              content: selectedNode.content,
+              tags: selectedNode.tags,
+              created_at: selectedNode.created_at,
+              degree: selectedNode.degree,
+            }}
+            onClose={() => setSelectedNode(null)}
+            onNavigateToNode={navigateToNode}
+            nodeLabelMap={nodeLabelMap}
+          />
         )}
       </div>
 
