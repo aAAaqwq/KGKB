@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 3,
+  "completed": 4,
   "tasks": [
     {
       "id": 1,
@@ -44,7 +44,7 @@
       "files": [
         "backend/app/services/embedding.py"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 5,

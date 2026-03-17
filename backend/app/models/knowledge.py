@@ -119,8 +119,14 @@ class EmbeddingRecord(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    """Embedding configuration."""
-    provider: str = "ollama"  # openai, ollama, custom
+    """Embedding configuration.
+
+    Providers:
+        ollama  — Local Ollama server (default: qwen3-embedding:0.6b at localhost:11434)
+        openai  — OpenAI API or any compatible endpoint
+        custom  — Generic OpenAI-compatible /v1/embeddings endpoint
+    """
+    provider: str = "ollama"
     model: str = "qwen3-embedding:0.6b"
     endpoint: str = "http://localhost:11434"
     dimension: int = 1024

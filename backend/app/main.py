@@ -24,7 +24,12 @@ from .models.knowledge import (
     GraphEdge,
 )
 from .services.knowledge import KnowledgeService
-from .services.embedding import EmbeddingService, create_embedding_service
+from .services.embedding import (
+    EmbeddingService,
+    create_embedding_service,
+    create_embedding_service_from_config,
+    load_config,
+)
 from .services.vector_store import FAISSVectorStore, VectorStoreManager
 
 
@@ -39,20 +44,32 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global knowledge_service, embedding_service, vector_manager
 
-    # Initialize knowledge service (default: ~/.kgkb/data.db)
-    db_path = Path.home() / ".kgkb" / "data.db"
+    # Load configuration from ~/.kgkb/config.json (or defaults)
+    app_config = load_config()
+
+    # Initialize knowledge service
+    db_path_str = app_config.database.get("path", "~/.kgkb/data.db")
+    db_path = Path(db_path_str).expanduser()
     knowledge_service = KnowledgeService(db_path)
 
-    # Initialize embedding service (default: ollama with qwen3-embedding)
-    embedding_service = create_embedding_service(
-        provider="ollama",
-        model="qwen3-embedding:0.6b",
-    )
+    # Initialize embedding service from config file (graceful if unavailable)
+    embedding_service = create_embedding_service_from_config()
+
+    # Check if embedding service is reachable
+    embedding_ok = await embedding_service.is_available()
+    if embedding_ok:
+        print(f"Embedding service ready: {embedding_service.config.provider} / {embedding_service.config.model}")
+    else:
+        print(
+            f"Warning: Embedding service not reachable ({embedding_service.config.provider} "
+            f"at {embedding_service.config.endpoint}). Semantic search disabled until available."
+        )
 
     # Initialize vector store
+    vector_dim = app_config.vector.get("dimension", app_config.embedding.dimension)
     vector_path = Path.home() / ".kgkb" / "vectors"
     vector_store = FAISSVectorStore(
-        dimension=1024,  # qwen3-embedding:0.6b default
+        dimension=vector_dim,
         index_path=vector_path,
     )
     vector_manager = VectorStoreManager(vector_store, embedding_service)
@@ -158,16 +175,29 @@ async def create_knowledge(data: KnowledgeCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create knowledge: {e}")
 
-    # Generate embedding asynchronously (best-effort, don't fail the request)
-    if vector_manager:
+    # Auto-embed: generate embedding asynchronously (best-effort, don't fail the request)
+    if vector_manager and embedding_service:
         try:
-            await vector_manager.index_knowledge(
-                id=knowledge.id,
-                content=knowledge.content,
-                metadata={"tags": knowledge.tags, "source": knowledge.source},
+            embedding_vec = await embedding_service.embed_knowledge(
+                knowledge.content,
+                metadata={"tags": knowledge.tags, "source": knowledge.source, "title": knowledge.title},
             )
+            if embedding_vec is not None:
+                vector_manager.store.add(
+                    knowledge.id,
+                    embedding_vec,
+                    {"content": knowledge.content, "tags": knowledge.tags},
+                )
+                # Record embedding in SQLite for tracking
+                knowledge_service.record_embedding(
+                    knowledge_id=knowledge.id,
+                    provider=embedding_service.config.provider,
+                    model=embedding_service.config.model,
+                    dimension=len(embedding_vec),
+                    vector_indexed=True,
+                )
         except Exception as e:
-            print(f"Warning: Failed to index knowledge {knowledge.id}: {e}")
+            print(f"Warning: Failed to auto-embed knowledge {knowledge.id}: {e}")
 
     return _knowledge_to_response(knowledge)
 
@@ -237,14 +267,28 @@ async def update_knowledge(kid: str, data: KnowledgeUpdate):
     if not knowledge:
         raise HTTPException(status_code=404, detail=f"Knowledge not found: {kid}")
 
-    # Re-index embedding if content changed
-    if data.content is not None and vector_manager:
+    # Re-index embedding if content changed (best-effort)
+    if data.content is not None and vector_manager and embedding_service:
         try:
-            await vector_manager.index_knowledge(
-                id=knowledge.id,
-                content=knowledge.content,
-                metadata={"tags": knowledge.tags, "source": knowledge.source},
+            embedding_vec = await embedding_service.embed_knowledge(
+                knowledge.content,
+                metadata={"tags": knowledge.tags, "source": knowledge.source, "title": knowledge.title},
             )
+            if embedding_vec is not None:
+                # Remove old vector, add new one
+                vector_manager.store.remove(knowledge.id)
+                vector_manager.store.add(
+                    knowledge.id,
+                    embedding_vec,
+                    {"content": knowledge.content, "tags": knowledge.tags},
+                )
+                knowledge_service.record_embedding(
+                    knowledge_id=knowledge.id,
+                    provider=embedding_service.config.provider,
+                    model=embedding_service.config.model,
+                    dimension=len(embedding_vec),
+                    vector_indexed=True,
+                )
         except Exception as e:
             print(f"Warning: Failed to re-index knowledge {knowledge.id}: {e}")
 
@@ -501,12 +545,38 @@ async def delete_relation(rid: str):
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
+    embedding_available = False
+    if embedding_service:
+        embedding_available = await embedding_service.is_available()
+
     return {
         "status": "healthy",
         "version": "0.1.0",
         "vector_count": vector_manager.store.count() if vector_manager else 0,
         "knowledge_count": knowledge_service.count() if knowledge_service else 0,
+        "embedding_available": embedding_available,
     }
+
+
+@app.get("/api/embedding/status")
+async def embedding_status():
+    """Get embedding service status and configuration.
+
+    Returns provider info, availability, and dimension/model details.
+    Useful for diagnostics and frontend config display.
+    """
+    if not embedding_service:
+        return {"available": False, "reason": "Embedding service not configured"}
+
+    available = await embedding_service.is_available(force_check=True)
+    info = embedding_service.get_provider_info()
+    info["available"] = available
+
+    if knowledge_service:
+        info["embedded_count"] = knowledge_service.embedding_count()
+        info["unembedded_count"] = len(knowledge_service.list_unembedded(limit=1000))
+
+    return info
 
 
 @app.get("/api/stats")
