@@ -39,20 +39,20 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global knowledge_service, embedding_service, vector_manager
 
-    # Initialize knowledge service
-    db_path = Path.home() / ".kgkb" / "kgkb.db"
+    # Initialize knowledge service (default: ~/.kgkb/data.db)
+    db_path = Path.home() / ".kgkb" / "data.db"
     knowledge_service = KnowledgeService(db_path)
 
-    # Initialize embedding service (default to ollama)
+    # Initialize embedding service (default: ollama with qwen3-embedding)
     embedding_service = create_embedding_service(
         provider="ollama",
-        model="nomic-embed-text",
+        model="qwen3-embedding:0.6b",
     )
 
     # Initialize vector store
     vector_path = Path.home() / ".kgkb" / "vectors"
     vector_store = FAISSVectorStore(
-        dimension=768,
+        dimension=1024,  # qwen3-embedding:0.6b default
         index_path=vector_path,
     )
     vector_manager = VectorStoreManager(vector_store, embedding_service)
@@ -92,12 +92,30 @@ app.add_middleware(
 )
 
 
+# ============ Helpers ============
+
+def _knowledge_to_response(k) -> KnowledgeResponse:
+    """Convert a KnowledgeEntry to a KnowledgeResponse."""
+    return KnowledgeResponse(
+        id=k.id,
+        title=getattr(k, "title", ""),
+        content=k.content,
+        content_type=getattr(k, "content_type", "text"),
+        tags=k.tags,
+        source=k.source,
+        created_at=k.created_at.isoformat(),
+        updated_at=k.updated_at.isoformat(),
+    )
+
+
 # ============ Knowledge Endpoints ============
 
 class KnowledgeResponse(BaseModel):
     """Response model for knowledge."""
     id: str
+    title: str
     content: str
+    content_type: str
     tags: List[str]
     source: Optional[str]
     created_at: str
@@ -109,6 +127,8 @@ async def create_knowledge(data: KnowledgeCreate):
     """Create a new knowledge entry."""
     knowledge = knowledge_service.create(
         content=data.content,
+        title=data.title,
+        content_type=data.content_type,
         tags=data.tags,
         source=data.source,
     )
@@ -124,14 +144,7 @@ async def create_knowledge(data: KnowledgeCreate):
         except Exception as e:
             print(f"Warning: Failed to index knowledge: {e}")
 
-    return KnowledgeResponse(
-        id=knowledge.id,
-        content=knowledge.content,
-        tags=knowledge.tags,
-        source=knowledge.source,
-        created_at=knowledge.created_at.isoformat(),
-        updated_at=knowledge.updated_at.isoformat(),
-    )
+    return _knowledge_to_response(knowledge)
 
 
 @app.get("/api/knowledge/{kid}", response_model=KnowledgeResponse)
@@ -141,14 +154,7 @@ async def get_knowledge(kid: str):
     if not knowledge:
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
-    return KnowledgeResponse(
-        id=knowledge.id,
-        content=knowledge.content,
-        tags=knowledge.tags,
-        source=knowledge.source,
-        created_at=knowledge.created_at.isoformat(),
-        updated_at=knowledge.updated_at.isoformat(),
-    )
+    return _knowledge_to_response(knowledge)
 
 
 @app.get("/api/knowledge", response_model=List[KnowledgeResponse])
@@ -159,17 +165,7 @@ async def list_knowledge(
 ):
     """List knowledge entries."""
     entries = knowledge_service.list(tag=tag, limit=limit, offset=offset)
-    return [
-        KnowledgeResponse(
-            id=k.id,
-            content=k.content,
-            tags=k.tags,
-            source=k.source,
-            created_at=k.created_at.isoformat(),
-            updated_at=k.updated_at.isoformat(),
-        )
-        for k in entries
-    ]
+    return [_knowledge_to_response(k) for k in entries]
 
 
 @app.put("/api/knowledge/{kid}", response_model=KnowledgeResponse)
@@ -177,21 +173,16 @@ async def update_knowledge(kid: str, data: KnowledgeUpdate):
     """Update a knowledge entry."""
     knowledge = knowledge_service.update(
         kid,
+        title=data.title,
         content=data.content,
+        content_type=data.content_type,
         tags=data.tags,
         source=data.source,
     )
     if not knowledge:
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
-    return KnowledgeResponse(
-        id=knowledge.id,
-        content=knowledge.content,
-        tags=knowledge.tags,
-        source=knowledge.source,
-        created_at=knowledge.created_at.isoformat(),
-        updated_at=knowledge.updated_at.isoformat(),
-    )
+    return _knowledge_to_response(knowledge)
 
 
 @app.delete("/api/knowledge/{kid}")
@@ -254,7 +245,7 @@ async def get_graph(
         nodes=[
             GraphNode(
                 id=n.id,
-                label=n.content[:50],
+                label=n.title if n.title else n.content[:50],
                 content=n.content,
                 tags=n.tags,
                 created_at=n.created_at,
@@ -312,9 +303,18 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
+        "version": "0.1.0",
         "vector_count": vector_manager.store.count() if vector_manager else 0,
         "knowledge_count": knowledge_service.count() if knowledge_service else 0,
     }
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """Get database statistics."""
+    if not knowledge_service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return knowledge_service.get_stats()
 
 
 @app.get("/")

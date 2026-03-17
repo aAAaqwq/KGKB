@@ -1,0 +1,333 @@
+{
+  "project": "KGKB",
+  "created": "2026-03-17T00:30:00+08:00",
+  "total_tasks": 30,
+  "completed": 1,
+  "tasks": [
+    {
+      "id": 1,
+      "phase": "Backend Foundation",
+      "title": "SQLite storage layer - proper DB init and schema",
+      "description": "Fix backend/app/services/knowledge.py: implement proper SQLite database initialization with the schema from PRD (knowledge_nodes, knowledge_relations, embeddings tables). Add connection pooling, auto-create DB file at ~/.kgkb/data.db. Add migration support. Ensure all CRUD methods actually work with SQLite.",
+      "files": [
+        "backend/app/services/knowledge.py",
+        "backend/app/models/knowledge.py"
+      ],
+      "done": true
+    },
+    {
+      "id": 2,
+      "phase": "Backend Foundation",
+      "title": "Knowledge CRUD API endpoints",
+      "description": "In backend/app/main.py: implement all knowledge endpoints - POST /api/knowledge (create), GET /api/knowledge/{id} (read), PUT /api/knowledge/{id} (update), DELETE /api/knowledge/{id} (delete), GET /api/knowledge (list with pagination, tag filter). Each endpoint should properly validate input, handle errors, and return consistent JSON responses.",
+      "files": [
+        "backend/app/main.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 3,
+      "phase": "Backend Foundation",
+      "title": "Relation CRUD API endpoints",
+      "description": "Add relation endpoints to backend/app/main.py: POST /api/relations (create relation between two nodes), DELETE /api/relations/{id}, GET /api/relations?node_id=X (list relations for a node), GET /api/graph (return all nodes+edges for graph rendering). Implement in knowledge service.",
+      "files": [
+        "backend/app/main.py",
+        "backend/app/services/knowledge.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 4,
+      "phase": "Backend Foundation",
+      "title": "Embedding service - Ollama integration",
+      "description": "Fix backend/app/services/embedding.py: implement EmbeddingService that supports Ollama (default: qwen3-embedding:0.6b at configurable URL), OpenAI API, and custom endpoints. Add config file support (~/.kgkb/config.json for provider settings). Auto-embed on knowledge creation. Handle errors gracefully when embedding service unavailable.",
+      "files": [
+        "backend/app/services/embedding.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 5,
+      "phase": "Backend Foundation",
+      "title": "FAISS vector store implementation",
+      "description": "Fix backend/app/services/vector_store.py: implement FAISSVectorStore with add_vector, search_similar, delete_vector methods. Store FAISS index at ~/.kgkb/vectors.faiss. Support configurable dimension (default 1024 for qwen3-embedding). Implement VectorStoreManager for lifecycle management. Handle empty index gracefully.",
+      "files": [
+        "backend/app/services/vector_store.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 6,
+      "phase": "Backend Foundation",
+      "title": "Semantic search endpoint",
+      "description": "Add GET /api/knowledge/search?q=xxx&mode=semantic|text|hybrid endpoint. Text search: SQLite FTS or LIKE. Semantic search: embed query -> FAISS similarity search -> return ranked results with scores. Hybrid: combine both. Return SearchResult objects with relevance scores.",
+      "files": [
+        "backend/app/main.py",
+        "backend/app/services/knowledge.py",
+        "backend/app/services/vector_store.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 7,
+      "phase": "CLI",
+      "title": "CLI add command with validation and auto-embed",
+      "description": "Fix cli/kgkb/main.py: implement 'kgkb add' command that accepts content (positional or --file), --tags (comma-separated), --source URL, --type (text/url/markdown). Validate inputs. Call backend API to create knowledge. Auto-trigger embedding if embedding service configured. Show created knowledge ID and summary.",
+      "files": [
+        "cli/kgkb/main.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 8,
+      "phase": "CLI",
+      "title": "CLI query/search and list commands",
+      "description": "Implement 'kgkb query <text>' for semantic search, 'kgkb search <text>' for text search, 'kgkb list' with --tag, --limit, --offset filters. Format output as a nice table (use rich or tabulate). Show ID, title/content preview, tags, created date. Support --json output format.",
+      "files": [
+        "cli/kgkb/main.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 9,
+      "phase": "CLI",
+      "title": "CLI link/unlink/relations/delete/export commands",
+      "description": "Implement: 'kgkb link <id1> <id2> --type related', 'kgkb unlink <id1> <id2>', 'kgkb relations <id>' to show node's relations, 'kgkb delete <id>' with confirmation, 'kgkb export --format json|md' to export all knowledge. Also add 'kgkb config' to set embedding provider/URL.",
+      "files": [
+        "cli/kgkb/main.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 10,
+      "phase": "Frontend Build",
+      "title": "Fix frontend build and dependencies",
+      "description": "cd frontend && npm install. Fix any TypeScript errors. Ensure 'npm run build' succeeds. Fix vite.config.ts to proxy /api to backend (localhost:8000). Verify 'npm run dev' starts the dev server. Fix any missing type declarations.",
+      "files": [
+        "frontend/package.json",
+        "frontend/vite.config.ts",
+        "frontend/tsconfig.json"
+      ],
+      "done": false
+    },
+    {
+      "id": 11,
+      "phase": "Frontend Build",
+      "title": "API client - complete all endpoints",
+      "description": "Fix frontend/src/api/client.ts: implement complete API client with all endpoints (knowledge CRUD, relations CRUD, search, graph data). Add proper TypeScript types matching backend models. Add error handling, loading states. Use axios with baseURL config.",
+      "files": [
+        "frontend/src/api/client.ts"
+      ],
+      "done": false
+    },
+    {
+      "id": 12,
+      "phase": "Frontend Build",
+      "title": "KnowledgeList view - complete implementation",
+      "description": "Fix frontend/src/views/KnowledgeList.tsx: implement full list view with search bar, tag filter chips, pagination. Show knowledge cards with title, content preview, tags, date. Click to expand/view details. Delete button with confirmation. Responsive grid layout. Empty state when no knowledge.",
+      "files": [
+        "frontend/src/views/KnowledgeList.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 13,
+      "phase": "Frontend Build",
+      "title": "AddKnowledge view - complete form",
+      "description": "Fix frontend/src/views/AddKnowledge.tsx: implement form with title input, content textarea (support markdown), tag input (chip-style, add on Enter), source URL input, content type selector. Validate required fields. Submit calls API, show success/error. Reset form on success.",
+      "files": [
+        "frontend/src/views/AddKnowledge.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 14,
+      "phase": "Frontend Build",
+      "title": "SearchView - semantic search interface",
+      "description": "Fix frontend/src/views/SearchView.tsx: search bar with mode toggle (text/semantic/hybrid). Show results as cards with relevance score badge. Highlight matching text. Click result to view detail. Show 'No results' empty state. Loading spinner during search.",
+      "files": [
+        "frontend/src/views/SearchView.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 15,
+      "phase": "Graph Visualization",
+      "title": "KnowledgeGraph - D3 force layout rendering",
+      "description": "Fix frontend/src/views/KnowledgeGraph.tsx: implement proper D3 force-directed graph. Fetch graph data from /api/graph. Render nodes as circles with labels. Render edges as lines with arrow markers. Color nodes by primary tag. Size nodes by connection count. Proper force simulation with collision detection.",
+      "files": [
+        "frontend/src/views/KnowledgeGraph.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 16,
+      "phase": "Graph Visualization",
+      "title": "Graph interactions - zoom, pan, drag",
+      "description": "Add zoom behavior (scroll to zoom, double-click to zoom in). Add pan (click-drag on background). Add node drag (click-drag on node repositions it). Smooth transitions. Fit-to-view button. Reset zoom button. Min/max zoom limits.",
+      "files": [
+        "frontend/src/views/KnowledgeGraph.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 17,
+      "phase": "Graph Visualization",
+      "title": "Graph node detail panel",
+      "description": "Click on a graph node -> show side panel with full knowledge details (title, content, tags, source, created date, relations list). Panel slides in from right. Close button. Edit button that links to edit view. Show relation list with ability to navigate to connected nodes.",
+      "files": [
+        "frontend/src/views/KnowledgeGraph.tsx",
+        "frontend/src/components/NodeDetailPanel.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 18,
+      "phase": "Graph Visualization",
+      "title": "Graph tag filtering and legend",
+      "description": "Add tag filter panel above graph: show all tags as colored chips, click to toggle visibility. Add legend showing tag-color mapping. When filter active, fade out non-matching nodes and edges. Show node/edge count. Add search-in-graph functionality to highlight matching nodes.",
+      "files": [
+        "frontend/src/views/KnowledgeGraph.tsx",
+        "frontend/src/components/GraphFilters.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 19,
+      "phase": "Graph Visualization",
+      "title": "Graph relation creation UI",
+      "description": "Add 'Link Mode' toggle button on graph. When active, click first node (highlight it), then click second node -> show dialog to select relation type and confirm. Create relation via API. Update graph with new edge. Visual feedback during linking process.",
+      "files": [
+        "frontend/src/views/KnowledgeGraph.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 20,
+      "phase": "Integration",
+      "title": "Backend startup and CORS configuration",
+      "description": "Create startup script: backend/run.py that initializes DB, starts uvicorn. Add proper CORS middleware config (allow localhost:5173 for dev). Add /api/health endpoint. Add /api/stats endpoint (node count, edge count, embedding count). Fix any import errors. Test all endpoints with curl.",
+      "files": [
+        "backend/run.py",
+        "backend/app/main.py"
+      ],
+      "done": false
+    },
+    {
+      "id": 21,
+      "phase": "Integration",
+      "title": "Frontend-backend integration verification",
+      "description": "Fix Vite proxy config to forward /api to backend. Test all API calls from frontend. Fix any CORS issues. Ensure knowledge list loads on page open. Ensure add knowledge form submits successfully. Ensure search returns results. Fix any serialization mismatches between frontend types and backend responses.",
+      "files": [
+        "frontend/vite.config.ts",
+        "frontend/src/api/client.ts"
+      ],
+      "done": false
+    },
+    {
+      "id": 22,
+      "phase": "Integration",
+      "title": "Knowledge detail and edit page",
+      "description": "Create frontend/src/views/KnowledgeDetail.tsx: show full knowledge with all fields. Add edit mode toggle. Inline editing for title, content (markdown), tags. Save button calls PUT API. Delete button with confirmation. Show relations with links to related nodes. Add route /knowledge/:id.",
+      "files": [
+        "frontend/src/views/KnowledgeDetail.tsx",
+        "frontend/src/App.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 23,
+      "phase": "Integration",
+      "title": "Import/export functionality",
+      "description": "Backend: Add POST /api/import (accept JSON array of knowledge items), GET /api/export?format=json|markdown. CLI: 'kgkb import file.json', 'kgkb export --format json > backup.json'. Frontend: Add Import/Export buttons on list page with file upload for import and download for export.",
+      "files": [
+        "backend/app/main.py",
+        "cli/kgkb/main.py",
+        "frontend/src/views/KnowledgeList.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 24,
+      "phase": "Polish",
+      "title": "Dark theme polish and responsive layout",
+      "description": "Polish the entire frontend dark theme: consistent color palette (gray-900 bg, gray-800 cards, blue-400 accent). Responsive layout for mobile. Polish navigation bar. Add favicon. Add page titles. Smooth transitions between pages. Consistent spacing and typography.",
+      "files": [
+        "frontend/src/App.css",
+        "frontend/src/index.css",
+        "frontend/tailwind.config.js"
+      ],
+      "done": false
+    },
+    {
+      "id": 25,
+      "phase": "Polish",
+      "title": "Loading states, error states, empty states",
+      "description": "Add loading spinners for all data fetches. Add error alerts for failed operations. Add empty state illustrations/messages for: no knowledge yet, no search results, no relations. Add skeleton loaders for list items. Toast notifications for successful operations.",
+      "files": [
+        "frontend/src/components/LoadingSpinner.tsx",
+        "frontend/src/components/EmptyState.tsx",
+        "frontend/src/components/Toast.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 26,
+      "phase": "Polish",
+      "title": "Confirm dialogs and better UX",
+      "description": "Add confirmation dialog for delete operations. Add keyboard shortcuts (Ctrl+K for search, Ctrl+N for new). Breadcrumb navigation. Back button on detail page. Auto-focus on search input. Debounced search. Tag autocomplete from existing tags.",
+      "files": [
+        "frontend/src/components/ConfirmDialog.tsx",
+        "frontend/src/hooks/useKeyboard.ts"
+      ],
+      "done": false
+    },
+    {
+      "id": 27,
+      "phase": "Polish",
+      "title": "Graph layout improvements",
+      "description": "Improve D3 force simulation parameters for better layout. Add graph legend. Add minimap for large graphs. Improve node label placement (avoid overlap). Add edge labels showing relation type. Animate new nodes/edges appearing. Better touch support for mobile.",
+      "files": [
+        "frontend/src/views/KnowledgeGraph.tsx"
+      ],
+      "done": false
+    },
+    {
+      "id": 28,
+      "phase": "Production",
+      "title": "Docker compose setup",
+      "description": "Create Dockerfile for backend (Python 3.11 slim), Dockerfile for frontend (Node 20 build + nginx serve). Create docker-compose.yml that runs both services. Add .dockerignore files. Volume mount for ~/.kgkb data persistence. Environment variable configuration.",
+      "files": [
+        "Dockerfile.backend",
+        "Dockerfile.frontend",
+        "docker-compose.yml",
+        ".dockerignore"
+      ],
+      "done": false
+    },
+    {
+      "id": 29,
+      "phase": "Production",
+      "title": "Startup scripts and README update",
+      "description": "Create start.sh: one-command dev startup (pip install, npm install, start backend + frontend). Create start-prod.sh for docker-compose. Update README.md with: real screenshots placeholder, quick start guide, CLI usage examples, configuration guide, development setup. Add CHANGELOG.md.",
+      "files": [
+        "start.sh",
+        "start-prod.sh",
+        "README.md",
+        "CHANGELOG.md"
+      ],
+      "done": false
+    },
+    {
+      "id": 30,
+      "phase": "Production",
+      "title": "E2E verification and final polish",
+      "description": "Create tests/test_e2e.py: test full flow - start backend, add knowledge via CLI, search via API, verify graph data, create relation, export. Fix any remaining bugs found. Ensure 'python -m pytest tests/' passes. Final git push with all changes.",
+      "files": [
+        "tests/test_e2e.py",
+        "tests/test_api.py"
+      ],
+      "done": false
+    }
+  ]
+}
