@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 14,
+  "completed": 15,
   "tasks": [
     {
       "id": 1,
@@ -158,7 +158,7 @@
       "files": [
         "frontend/src/views/KnowledgeGraph.tsx"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 16,
