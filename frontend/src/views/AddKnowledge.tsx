@@ -27,11 +27,11 @@ export function AddKnowledge() {
         .map(t => t.trim())
         .filter(Boolean)
 
-      const entry = await api.createKnowledge(
-        content.trim(),
-        tagList,
-        source.trim() || undefined,
-      )
+      const entry = await api.createKnowledge({
+        content: content.trim(),
+        tags: tagList,
+        source: source.trim() || undefined,
+      })
 
       setSuccess(`Added knowledge ${entry.id.slice(0, 8)}`)
       setContent('')

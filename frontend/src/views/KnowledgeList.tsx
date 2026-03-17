@@ -3,7 +3,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
-import { api, KnowledgeEntry } from '../api/client'
+import { api, KnowledgeEntry, PaginatedKnowledgeResponse } from '../api/client'
 
 export function KnowledgeList() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([])
@@ -17,8 +17,11 @@ export function KnowledgeList() {
   const loadEntries = async () => {
     try {
       setLoading(true)
-      const data = await api.listKnowledge(tagFilter || undefined, 50)
-      setEntries(data)
+      const data = await api.listKnowledge({
+        tag: tagFilter || undefined,
+        limit: 50,
+      })
+      setEntries(data.items)
     } catch (err) {
       console.error('Failed to load entries:', err)
       setEntries([])
