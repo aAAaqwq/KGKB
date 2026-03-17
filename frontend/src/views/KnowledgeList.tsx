@@ -14,6 +14,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { api, KnowledgeEntry, KnowledgeCreatePayload, PaginatedKnowledgeResponse } from '../api/client'
+import { LoadingSpinner, SkeletonCard } from '../components/LoadingSpinner'
+import { EmptyState } from '../components/EmptyState'
+import { useToast } from '../components/Toast'
 
 const PAGE_SIZE = 12
 
@@ -72,6 +75,7 @@ export function KnowledgeList() {
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null)
+  const toast = useToast()
 
   // Hidden file input for import
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -177,7 +181,7 @@ export function KnowledgeList() {
       api.listTags().then(setAllTags).catch(() => {})
     } catch (err) {
       console.error('Failed to delete:', err)
-      alert('Failed to delete entry. Please try again.')
+      toast.error('Failed to delete entry. Please try again.')
     } finally {
       setDeletingId(null)
     }
@@ -201,7 +205,7 @@ export function KnowledgeList() {
       URL.revokeObjectURL(url)
     } catch (err) {
       console.error('Export failed:', err)
-      alert('Failed to export data. Please try again.')
+      toast.error('Failed to export data. Please try again.')
     } finally {
       setExporting(false)
     }
@@ -224,7 +228,7 @@ export function KnowledgeList() {
       try {
         parsed = JSON.parse(text)
       } catch {
-        alert('Invalid JSON file. Please select a valid JSON file.')
+        toast.error('Invalid JSON file. Please select a valid JSON file.')
         setImporting(false)
         return
       }
@@ -238,13 +242,13 @@ export function KnowledgeList() {
       } else if (parsed && typeof parsed === 'object' && 'items' in parsed) {
         items = (parsed as { items: KnowledgeCreatePayload[] }).items
       } else {
-        alert('Unrecognized JSON structure. Expected an array or an object with a "knowledge" key.')
+        toast.error('Unrecognized JSON structure. Expected an array or an object with a "knowledge" key.')
         setImporting(false)
         return
       }
 
       if (items.length === 0) {
-        alert('No items found in the file.')
+        toast.warning('No items found in the file.')
         setImporting(false)
         return
       }
@@ -262,7 +266,7 @@ export function KnowledgeList() {
       api.listTags().then(setAllTags).catch(() => {})
     } catch (err) {
       console.error('Import failed:', err)
-      alert('Failed to import data. Please try again.')
+      toast.error('Failed to import data. Please try again.')
     } finally {
       setImporting(false)
     }
@@ -419,34 +423,30 @@ export function KnowledgeList() {
 
       {/* Content */}
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm text-gray-400">Loading…</span>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
         </div>
       ) : entries.length === 0 ? (
-        <div className="text-center py-16">
-          <p className="text-5xl mb-4">{hasActiveFilters ? '🔍' : '📭'}</p>
-          <p className="text-gray-400 text-lg mb-2">
-            {hasActiveFilters ? 'No matching entries found' : 'No knowledge entries yet'}
-          </p>
-          <p className="text-gray-500 text-sm">
-            {hasActiveFilters ? (
-              <button onClick={clearFilters} className="text-blue-400 hover:underline">
-                Clear filters
-              </button>
-            ) : (
-              <>
-                Use <code className="bg-gray-800 px-2 py-0.5 rounded text-xs">kgkb add</code> or the{' '}
-                <a href="/add" className="text-blue-400 hover:underline">
-                  Add page
-                </a>{' '}
-                to get started.
-              </>
-            )}
-          </p>
-        </div>
+        hasActiveFilters ? (
+          <EmptyState
+            variant="no-results"
+            description={`No entries match your current filters.`}
+            actionLabel="Clear filters"
+            onAction={clearFilters}
+          />
+        ) : (
+          <EmptyState
+            variant="no-data"
+            actionLabel="➕ Add Knowledge"
+            actionLink="/add"
+          >
+            <p className="text-gray-500 text-sm mb-4">
+              Use <code className="bg-gray-800 px-2 py-0.5 rounded text-xs font-mono">kgkb add</code> or the Add page to get started.
+            </p>
+          </EmptyState>
+        )
       ) : (
         <>
           {/* Card grid */}

@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 24,
+  "completed": 25,
   "tasks": [
     {
       "id": 1,
@@ -269,7 +269,7 @@
         "frontend/src/components/EmptyState.tsx",
         "frontend/src/components/Toast.tsx"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 26,

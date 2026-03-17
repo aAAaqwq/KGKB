@@ -25,6 +25,7 @@ import { api, GraphData, GraphNode, GraphEdge } from '../api/client'
 import { NodeDetailPanel, NodeInfo } from '../components/NodeDetailPanel'
 import { GraphFilters, TagCount } from '../components/GraphFilters'
 import { LinkModeDialog } from '../components/LinkModeDialog'
+import { LoadingSpinner } from '../components/LoadingSpinner'
 
 /** Simulation node with degree (connection count) for sizing. */
 interface SimNode extends d3.SimulationNodeDatum {
@@ -746,9 +747,7 @@ export function KnowledgeGraph() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-[600px]">
-        <div className="animate-pulse text-gray-400 text-lg">Loading graph...</div>
-      </div>
+      <LoadingSpinner size="lg" label="Loading graph…" fullHeight />
     )
   }
 

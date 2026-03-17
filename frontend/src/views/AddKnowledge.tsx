@@ -14,6 +14,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { api, getErrorMessage } from '../api/client'
+import { useToast } from '../components/Toast'
 
 /** Content type options for the selector */
 const CONTENT_TYPES = [
@@ -39,6 +40,7 @@ export function AddKnowledge() {
   const [success, setSuccess] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const toast = useToast()
 
   // Refs
   const tagInputRef = useRef<HTMLInputElement>(null)
@@ -130,6 +132,7 @@ export function AddKnowledge() {
 
       const displayTitle = entry.title || entry.content.slice(0, 40) + (entry.content.length > 40 ? '…' : '')
       setSuccess(`Added: "${displayTitle}" (${entry.id.slice(0, 8)})`)
+      toast.success(`Added: "${displayTitle}"`)
 
       // Reset form
       setTitle('')

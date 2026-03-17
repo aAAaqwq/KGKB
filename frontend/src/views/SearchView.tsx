@@ -19,6 +19,8 @@ import {
   SearchMode,
   getErrorMessage,
 } from '../api/client'
+import { LoadingSpinner } from '../components/LoadingSpinner'
+import { EmptyState } from '../components/EmptyState'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -331,20 +333,10 @@ export function SearchView() {
 
       {/* Loading spinner */}
       {searching && (
-        <div className="flex items-center justify-center py-16">
-          <div className="flex flex-col items-center gap-4">
-            <div className="relative">
-              <div className="w-12 h-12 border-2 border-blue-500/30 rounded-full" />
-              <div className="absolute inset-0 w-12 h-12 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-            </div>
-            <div className="text-center">
-              <p className="text-gray-300 text-sm">
-                Searching with <strong>{SEARCH_MODES.find(m => m.value === mode)?.label}</strong> mode…
-              </p>
-              <p className="text-gray-500 text-xs mt-1">"{query}"</p>
-            </div>
-          </div>
-        </div>
+        <LoadingSpinner
+          size="lg"
+          label={`Searching with ${SEARCH_MODES.find(m => m.value === mode)?.label} mode — "${query}"`}
+        />
       )}
 
       {/* Results */}
@@ -505,17 +497,12 @@ export function SearchView() {
             </div>
           ) : (
             /* Empty state */
-            <div className="text-center py-16">
-              <p className="text-5xl mb-4">🔍</p>
-              <p className="text-gray-300 text-lg mb-2">No results found</p>
-              <p className="text-gray-500 text-sm mb-4">
-                Nothing matched <span className="text-gray-400">"{lastQuery}"</span> in{' '}
-                <span className="text-gray-400">
-                  {SEARCH_MODES.find(m => m.value === lastMode)?.label}
-                </span>{' '}
-                mode
-              </p>
-              <div className="max-w-md mx-auto text-left bg-gray-800/50 rounded-lg border border-gray-700 p-4">
+            <EmptyState
+              variant="no-results"
+              title="No results found"
+              description={`Nothing matched "${lastQuery}" in ${SEARCH_MODES.find(m => m.value === lastMode)?.label} mode`}
+            >
+              <div className="max-w-md mx-auto text-left bg-gray-800/50 rounded-lg border border-gray-700 p-4 mt-4">
                 <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Suggestions</p>
                 <ul className="text-sm text-gray-400 space-y-1.5">
                   <li>• Try different keywords or broader terms</li>
@@ -529,7 +516,7 @@ export function SearchView() {
                   )}
                 </ul>
               </div>
-            </div>
+            </EmptyState>
           )}
         </>
       )}

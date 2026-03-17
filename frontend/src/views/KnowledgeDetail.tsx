@@ -20,6 +20,9 @@ import {
   KnowledgeUpdatePayload,
   getErrorMessage,
 } from '../api/client'
+import { LoadingSpinner } from '../components/LoadingSpinner'
+import { EmptyState } from '../components/EmptyState'
+import { useToast } from '../components/Toast'
 
 // ---- Helpers ----
 
@@ -128,7 +131,7 @@ export function KnowledgeDetail() {
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const toast = useToast()
 
   // Edit form state
   const [editTitle, setEditTitle] = useState('')
@@ -139,13 +142,6 @@ export function KnowledgeDetail() {
   const [editSource, setEditSource] = useState('')
 
   const tagInputRef = useRef<HTMLInputElement>(null)
-
-  // Auto-dismiss toast
-  useEffect(() => {
-    if (!toast) return
-    const timer = setTimeout(() => setToast(null), 4000)
-    return () => clearTimeout(timer)
-  }, [toast])
 
   // ---- Fetch data ----
 
@@ -272,9 +268,9 @@ export function KnowledgeDetail() {
       const updated = await api.updateKnowledge(id, payload)
       setEntry(updated)
       setEditing(false)
-      setToast({ type: 'success', message: 'Changes saved successfully' })
+      toast.success('Changes saved successfully')
     } catch (err) {
-      setToast({ type: 'error', message: getErrorMessage(err) })
+      toast.error(getErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -287,11 +283,11 @@ export function KnowledgeDetail() {
     try {
       setDeleting(true)
       await api.deleteKnowledge(id)
-      setToast({ type: 'success', message: 'Entry deleted' })
+      toast.success('Entry deleted')
       // Navigate back after short delay so toast is visible
       setTimeout(() => navigate('/list'), 500)
     } catch (err) {
-      setToast({ type: 'error', message: getErrorMessage(err) })
+      toast.error(getErrorMessage(err))
       setDeleting(false)
       setShowDeleteConfirm(false)
     }
@@ -300,30 +296,20 @@ export function KnowledgeDetail() {
   // ---- Loading state ----
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-gray-400">Loading knowledge entry…</span>
-        </div>
-      </div>
-    )
+    return <LoadingSpinner size="md" label="Loading knowledge entry…" />
   }
 
   // ---- Error state ----
 
   if (error || !entry) {
     return (
-      <div className="max-w-2xl mx-auto text-center py-16">
-        <p className="text-5xl mb-4">😕</p>
-        <p className="text-gray-400 text-lg mb-2">{error || 'Entry not found'}</p>
-        <button
-          onClick={() => navigate(-1)}
-          className="text-blue-400 hover:text-blue-300 text-sm mt-4 inline-flex items-center gap-1"
-        >
-          ← Go back
-        </button>
-      </div>
+      <EmptyState
+        variant="error"
+        title={error || 'Entry not found'}
+        actionLabel="← Go back"
+        onAction={() => navigate(-1)}
+        className="max-w-2xl mx-auto"
+      />
     )
   }
 
@@ -333,26 +319,6 @@ export function KnowledgeDetail() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* Toast notification */}
-      {toast && (
-        <div
-          className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-lg text-sm shadow-lg
-            ${toast.type === 'success'
-              ? 'bg-green-900/80 border border-green-700/50 text-green-300'
-              : 'bg-red-900/80 border border-red-700/50 text-red-300'
-            }`}
-        >
-          <span>{toast.type === 'success' ? '✅' : '❌'}</span>
-          <span>{toast.message}</span>
-          <button
-            onClick={() => setToast(null)}
-            className="ml-2 opacity-60 hover:opacity-100 transition"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
       {/* Breadcrumb / back button */}
       <div className="flex items-center justify-between">
         <button
