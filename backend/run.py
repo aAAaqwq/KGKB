@@ -19,11 +19,13 @@ from pathlib import Path
 
 
 def ensure_data_dir() -> Path:
-    """Create ~/.kgkb directory structure if it doesn't exist.
+    """Create data directory structure if it doesn't exist.
 
+    Uses KGKB_DATA_DIR env var if set (for Docker), otherwise ~/.kgkb.
     Returns the data directory path.
     """
-    data_dir = Path.home() / ".kgkb"
+    env_dir = os.environ.get("KGKB_DATA_DIR")
+    data_dir = Path(env_dir) if env_dir else Path.home() / ".kgkb"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
@@ -156,6 +158,9 @@ Examples:
         print(f"Warning: Database pre-init failed ({e}). Will initialize on first request.")
 
     # Step 4: Print banner and start server
+    # Export KGKB_DATA_DIR so the FastAPI app picks it up too
+    os.environ.setdefault("KGKB_DATA_DIR", str(data_dir))
+
     print_banner(args.host, args.port, args.reload)
 
     import uvicorn

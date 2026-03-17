@@ -1,0 +1,87 @@
+# ============================================================
+# KGKB — Knowledge Graph Knowledge Base
+# Docker Compose Configuration
+# ============================================================
+#
+# Quick start:
+#   docker compose up -d
+#
+# With rebuild:
+#   docker compose up -d --build
+#
+# View logs:
+#   docker compose logs -f
+#
+# Stop:
+#   docker compose down
+#
+# ============================================================
+
+services:
+  # -----------------------------------------------------------
+  # Backend: FastAPI + SQLite + FAISS
+  # -----------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: kgkb-backend
+    restart: unless-stopped
+    ports:
+      - "${KGKB_BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Persist database, vector index, and config across restarts
+      - kgkb-data:/data
+    environment:
+      - KGKB_HOST=0.0.0.0
+      - KGKB_PORT=8000
+      - KGKB_LOG_LEVEL=${KGKB_LOG_LEVEL:-info}
+      - KGKB_DATA_DIR=/data
+      # Embedding service configuration (Ollama on host)
+      - KGKB_EMBEDDING_PROVIDER=${KGKB_EMBEDDING_PROVIDER:-ollama}
+      - KGKB_EMBEDDING_MODEL=${KGKB_EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      - KGKB_EMBEDDING_ENDPOINT=${KGKB_EMBEDDING_ENDPOINT:-http://host.docker.internal:11434}
+    networks:
+      - kgkb-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # -----------------------------------------------------------
+  # Frontend: React + Nginx (proxies /api to backend)
+  # -----------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: kgkb-frontend
+    restart: unless-stopped
+    ports:
+      - "${KGKB_FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - kgkb-net
+
+# -----------------------------------------------------------
+# Volumes: persistent data storage
+# -----------------------------------------------------------
+volumes:
+  kgkb-data:
+    driver: local
+    # To bind-mount to a specific host path instead, uncomment:
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: ${HOME}/.kgkb
+
+# -----------------------------------------------------------
+# Networks
+# -----------------------------------------------------------
+networks:
+  kgkb-net:
+    driver: bridge

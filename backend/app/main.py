@@ -45,12 +45,16 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global knowledge_service, embedding_service, vector_manager
 
-    # Load configuration from ~/.kgkb/config.json (or defaults)
+    # Load configuration from config.json (check KGKB_DATA_DIR, then ~/.kgkb)
     app_config = load_config()
 
-    # Initialize knowledge service
-    db_path_str = app_config.database.get("path", "~/.kgkb/data.db")
-    db_path = Path(db_path_str).expanduser()
+    # Initialize knowledge service — respect KGKB_DATA_DIR for Docker
+    data_dir_env = os.environ.get("KGKB_DATA_DIR")
+    if data_dir_env:
+        db_path = Path(data_dir_env) / "data.db"
+    else:
+        db_path_str = app_config.database.get("path", "~/.kgkb/data.db")
+        db_path = Path(db_path_str).expanduser()
     knowledge_service = KnowledgeService(db_path)
 
     # Initialize embedding service from config file (graceful if unavailable)
@@ -66,9 +70,12 @@ async def lifespan(app: FastAPI):
             f"at {embedding_service.config.endpoint}). Semantic search disabled until available."
         )
 
-    # Initialize vector store
+    # Initialize vector store — respect KGKB_DATA_DIR for Docker
     vector_dim = app_config.vector.get("dimension", app_config.embedding.dimension)
-    vector_path = Path.home() / ".kgkb" / "vectors"
+    if data_dir_env:
+        vector_path = Path(data_dir_env) / "vectors"
+    else:
+        vector_path = Path.home() / ".kgkb" / "vectors"
     vector_store = FAISSVectorStore(
         dimension=vector_dim,
         index_path=vector_path,

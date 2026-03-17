@@ -1,0 +1,44 @@
+# ============================================================
+# KGKB Frontend — Node 20 Build + Nginx Serve
+# Multi-stage build: build React app, serve with nginx
+# ============================================================
+
+# ---- Stage 1: Build the React app ----
+FROM node:20-slim AS builder
+
+WORKDIR /build
+
+# Copy package files first for layer caching
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+# Copy source and build
+COPY frontend/ ./
+RUN npm run build
+
+# ---- Stage 2: Serve with nginx ----
+FROM nginx:1.25-alpine AS runtime
+
+LABEL maintainer="KGKB Team"
+LABEL description="KGKB Frontend — Knowledge Graph Knowledge Base UI"
+
+# Remove default nginx content
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy built assets from builder
+COPY --from=builder /build/dist /usr/share/nginx/html
+
+# Custom nginx configuration
+# - SPA fallback (index.html for all routes)
+# - Proxy /api to backend service
+# - Gzip compression
+# - Cache static assets
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Non-root nginx (optional, alpine nginx already runs worker as nobody)
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:80/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]
