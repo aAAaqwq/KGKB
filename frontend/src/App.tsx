@@ -4,6 +4,7 @@ import { KnowledgeGraph } from './views/KnowledgeGraph'
 import { KnowledgeList } from './views/KnowledgeList'
 import { SearchView } from './views/SearchView'
 import { AddKnowledge } from './views/AddKnowledge'
+import { KnowledgeDetail } from './views/KnowledgeDetail'
 import { api } from './api/client'
 import './App.css'
 
@@ -112,6 +113,7 @@ function AppContent() {
           <Route path="/list" element={<KnowledgeList />} />
           <Route path="/search" element={<SearchView />} />
           <Route path="/add" element={<AddKnowledge />} />
+          <Route path="/knowledge/:id" element={<KnowledgeDetail />} />
         </Routes>
       </main>
     </div>

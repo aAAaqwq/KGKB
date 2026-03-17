@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 21,
+  "completed": 22,
   "tasks": [
     {
       "id": 1,
@@ -233,7 +233,7 @@
         "frontend/src/views/KnowledgeDetail.tsx",
         "frontend/src/App.tsx"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 23,

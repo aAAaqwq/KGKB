@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { api, KnowledgeEntry, PaginatedKnowledgeResponse } from '../api/client'
 
 const PAGE_SIZE = 12
@@ -397,6 +398,14 @@ export function KnowledgeList() {
 
                       {/* Actions */}
                       <div className="flex items-center gap-3 pt-1">
+                        <Link
+                          to={`/knowledge/${entry.id}`}
+                          onClick={e => e.stopPropagation()}
+                          className="px-3 py-1.5 text-xs rounded-md border border-blue-700/50 text-blue-400
+                                     hover:bg-blue-900/30 hover:border-blue-600 transition"
+                        >
+                          📄 View / Edit
+                        </Link>
                         <button
                           onClick={e => {
                             e.stopPropagation()
