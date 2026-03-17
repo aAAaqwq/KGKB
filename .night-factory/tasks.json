@@ -2,7 +2,7 @@
   "project": "KGKB",
   "created": "2026-03-17T00:30:00+08:00",
   "total_tasks": 30,
-  "completed": 25,
+  "completed": 26,
   "tasks": [
     {
       "id": 1,
@@ -280,7 +280,7 @@
         "frontend/src/components/ConfirmDialog.tsx",
         "frontend/src/hooks/useKeyboard.ts"
       ],
-      "done": false
+      "done": true
     },
     {
       "id": 27,

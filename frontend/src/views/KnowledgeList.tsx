@@ -17,6 +17,7 @@ import { api, KnowledgeEntry, KnowledgeCreatePayload, PaginatedKnowledgeResponse
 import { LoadingSpinner, SkeletonCard } from '../components/LoadingSpinner'
 import { EmptyState } from '../components/EmptyState'
 import { useToast } from '../components/Toast'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 const PAGE_SIZE = 12
 
@@ -76,6 +77,7 @@ export function KnowledgeList() {
   const [exporting, setExporting] = useState(false)
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null)
   const toast = useToast()
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null)
 
   // Hidden file input for import
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -564,9 +566,7 @@ export function KnowledgeList() {
                         <button
                           onClick={e => {
                             e.stopPropagation()
-                            if (confirm(`Delete "${displayTitle}"?\n\nThis cannot be undone.`)) {
-                              handleDelete(entry.id)
-                            }
+                            setConfirmDelete({ id: entry.id, title: displayTitle })
                           }}
                           className="px-3 py-1.5 text-xs rounded-md border border-red-800/50 text-red-400
                                      hover:bg-red-900/30 hover:border-red-700 transition"
@@ -617,6 +617,31 @@ export function KnowledgeList() {
           )}
         </>
       )}
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete this entry?"
+        message={
+          confirmDelete ? (
+            <>
+              <p className="mb-1">You are about to delete:</p>
+              <p className="text-gray-200 font-medium truncate">"{confirmDelete.title}"</p>
+              <p className="text-gray-500 text-xs mt-2">This action cannot be undone.</p>
+            </>
+          ) : ''
+        }
+        confirmLabel="🗑 Delete"
+        danger
+        loading={!!deletingId}
+        onConfirm={() => {
+          if (confirmDelete) {
+            handleDelete(confirmDelete.id)
+            setConfirmDelete(null)
+          }
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   )
 }

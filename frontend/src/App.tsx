@@ -6,6 +6,7 @@ import { SearchView } from './views/SearchView'
 import { AddKnowledge } from './views/AddKnowledge'
 import { KnowledgeDetail } from './views/KnowledgeDetail'
 import { api } from './api/client'
+import { useKeyboardShortcuts } from './hooks/useKeyboard'
 import './App.css'
 
 // ─── Page title mapping ────────────────────────────────────────────────────
@@ -172,6 +173,9 @@ function AppContent() {
   // Update page title on route change
   usePageTitle()
 
+  // Global keyboard shortcuts (Ctrl+K search, Ctrl+N new)
+  useKeyboardShortcuts()
+
   // Close mobile menu on route change
   useEffect(() => {
     setMobileMenuOpen(false)
@@ -212,6 +216,13 @@ function AppContent() {
                   {item.label}
                 </NavLink>
               ))}
+              {/* Keyboard shortcut hints */}
+              <div className="hidden lg:flex items-center ml-3 pl-3 border-l border-gray-700/50 gap-2">
+                <kbd className="text-2xs text-gray-600 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 font-mono">
+                  ⌘K
+                </kbd>
+                <span className="text-2xs text-gray-600">Search</span>
+              </div>
             </div>
 
             {/* Mobile hamburger */}
